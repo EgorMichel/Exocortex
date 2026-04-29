@@ -1,0 +1,331 @@
+"""
+Репозиторий для операций с графом знаний.
+
+Использует NetworkX для хранения графа в памяти (для MVP).
+В будущем может быть заменён на Neo4j или другую графовую БД.
+"""
+
+import json
+from pathlib import Path
+from typing import Optional, List, Dict, Any
+from datetime import datetime
+import networkx as nx
+
+from app.core.models import Node, Edge, NodeType, EdgeType, KnowledgeFragment
+
+
+class GraphRepository:
+    """
+    Репозиторий для управления графом знаний.
+    
+    Поддерживает:
+    - CRUD операции для узлов и связей
+    - Сохранение/загрузку графа на диск
+    - Поиск и фильтрацию узлов
+    - Получение связанных узлов
+    """
+    
+    def __init__(self, storage_path: Optional[str] = None):
+        """
+        Инициализация репозитория.
+        
+        Args:
+            storage_path: Путь к файлу для сохранения графа.
+                         Если None, граф хранится только в памяти.
+        """
+        self.graph = nx.MultiDiGraph()  # MultiDiGraph позволяет несколько связей между узлами
+        self.storage_path = Path(storage_path) if storage_path else None
+        self.fragments: Dict[str, KnowledgeFragment] = {}
+        
+        if self.storage_path and self.storage_path.exists():
+            self.load()
+    
+    # === Операции с узлами ===
+    
+    def add_node(self, node: Node) -> None:
+        """Добавить узел в граф."""
+        self.graph.add_node(
+            node.id,
+            **node.to_dict()
+        )
+    
+    def get_node(self, node_id: str) -> Optional[Node]:
+        """Получить узел по ID."""
+        if node_id not in self.graph:
+            return None
+        
+        data = self.graph.nodes[node_id]
+        return Node.from_dict(data)
+    
+    def update_node(self, node: Node) -> bool:
+        """
+        Обновить существующий узел.
+        
+        Returns:
+            True если узел существовал и был обновлён, False иначе.
+        """
+        if node.id not in self.graph:
+            return False
+        
+        self.graph.nodes[node.id].update(node.to_dict())
+        return True
+    
+    def delete_node(self, node_id: str) -> bool:
+        """
+        Удалить узел из графа.
+        
+        Returns:
+            True если узел существовал и был удалён, False иначе.
+        """
+        if node_id not in self.graph:
+            return False
+        
+        self.graph.remove_node(node_id)
+        return True
+    
+    def get_all_nodes(self) -> List[Node]:
+        """Получить все узлы графа."""
+        return [
+            Node.from_dict(dict(self.graph.nodes[node_id]))
+            for node_id in self.graph.nodes()
+        ]
+    
+    def get_nodes_by_type(self, node_type: NodeType) -> List[Node]:
+        """Получить узлы определённого типа."""
+        return [
+            node for node in self.get_all_nodes()
+            if node.node_type == node_type
+        ]
+    
+    def search_nodes(self, query: str) -> List[Node]:
+        """
+        Поиск узлов по содержимому (простой текстовый поиск).
+        
+        В будущем может быть заменён на семантический поиск через эмбеддинги.
+        """
+        query_lower = query.lower()
+        return [
+            node for node in self.get_all_nodes()
+            if query_lower in node.content.lower()
+        ]
+    
+    def get_forgotten_nodes(self, threshold: float = 0.3) -> List[Node]:
+        """Получить узлы, которые считаются «забытыми»."""
+        return [
+            node for node in self.get_all_nodes()
+            if node.is_forgotten(threshold)
+        ]
+    
+    # === Операции со связями ===
+    
+    def add_edge(self, edge: Edge) -> None:
+        """Добавить связь в граф."""
+        self.graph.add_edge(
+            edge.source_id,
+            edge.target_id,
+            key=edge.id,
+            **edge.to_dict()
+        )
+    
+    def get_edge(self, edge_id: str) -> Optional[Edge]:
+        """Получить связь по ID."""
+        for source, target, key, data in self.graph.edges(keys=True, data=True):
+            if key == edge_id:
+                return Edge.from_dict(data)
+        return None
+    
+    def get_edges_between(self, source_id: str, target_id: str) -> List[Edge]:
+        """Получить все связи между двумя узлами."""
+        if source_id not in self.graph or target_id not in self.graph:
+            return []
+        
+        edges = []
+        for key, data in self.graph.get_edge_data(source_id, target_id, default={}).items():
+            if key != 'key':  # Пропускаем служебные ключи
+                edges.append(Edge.from_dict(data))
+        
+        return edges
+    
+    def delete_edge(self, edge_id: str) -> bool:
+        """
+        Удалить связь по ID.
+        
+        Returns:
+            True если связь существовала и была удалена, False иначе.
+        """
+        for source, target, key, _ in self.graph.edges(keys=True, data=True):
+            if key == edge_id:
+                self.graph.remove_edge(source, target, key=key)
+                return True
+        return False
+    
+    def get_all_edges(self) -> List[Edge]:
+        """Получить все связи графа."""
+        edges = []
+        for source, target, key, data in self.graph.edges(keys=True, data=True):
+            edges.append(Edge.from_dict(data))
+        return edges
+    
+    def get_contradictions(self) -> List[Edge]:
+        """Получить все связи типа «противоречие»."""
+        return [
+            edge for edge in self.get_all_edges()
+            if edge.edge_type == EdgeType.CONTRADICTS
+        ]
+    
+    # === Навигация по графу ===
+    
+    def get_neighbors(self, node_id: str, radius: int = 1) -> List[Node]:
+        """
+        Получить соседние узлы.
+        
+        Args:
+            node_id: ID центрального узла
+            radius: Количество шагов от узла (по умолчанию 1)
+        """
+        if node_id not in self.graph:
+            return []
+        
+        neighbor_ids = nx.single_source_shortest_path_length(
+            self.graph, node_id, cutoff=radius
+        ).keys()
+        
+        return [
+            Node.from_dict(dict(self.graph.nodes[nid]))
+            for nid in neighbor_ids
+            if nid != node_id
+        ]
+    
+    def get_related_nodes(self, node_id: str) -> List[tuple[Node, Edge]]:
+        """
+        Получить узлы, связанные с данным, вместе со связями.
+        
+        Returns:
+            Список кортежей (узел, связь)
+        """
+        if node_id not in self.graph:
+            return []
+        
+        result = []
+        for neighbor_id in self.graph.neighbors(node_id):
+            neighbor = self.get_node(neighbor_id)
+            if neighbor:
+                edges = self.get_edges_between(node_id, neighbor_id)
+                for edge in edges:
+                    result.append((neighbor, edge))
+        
+        return result
+    
+    # === Операции с фрагментами ===
+    
+    def add_fragment(self, fragment: KnowledgeFragment) -> None:
+        """Добавить исходный фрагмент знания."""
+        self.fragments[fragment.id] = fragment
+    
+    def get_fragment(self, fragment_id: str) -> Optional[KnowledgeFragment]:
+        """Получить фрагмент по ID."""
+        return self.fragments.get(fragment_id)
+    
+    def get_all_fragments(self) -> List[KnowledgeFragment]:
+        """Получить все фрагменты."""
+        return list(self.fragments.values())
+    
+    # === Сохранение и загрузка ===
+    
+    def save(self) -> None:
+        """Сохранить граф и фрагменты на диск."""
+        if not self.storage_path:
+            raise ValueError("storage_path не указан")
+        
+        # Сохраняем граф как GraphML
+        graphml_path = self.storage_path.with_suffix('.graphml')
+        nx.write_graphml(self.graph, graphml_path)
+        
+        # Сохраняем фрагменты отдельно как JSON
+        fragments_path = self.storage_path.with_suffix('.fragments.json')
+        with open(fragments_path, 'w', encoding='utf-8') as f:
+            json.dump(
+                [f.to_dict() for f in self.fragments.values()],
+                f,
+                ensure_ascii=False,
+                indent=2
+            )
+    
+    def load(self) -> None:
+        """Загрузить граф и фрагменты с диска."""
+        if not self.storage_path:
+            raise ValueError("storage_path не указан")
+        
+        # Загружаем граф
+        graphml_path = self.storage_path.with_suffix('.graphml')
+        if graphml_path.exists():
+            loaded_graph = nx.read_graphml(graphml_path)
+            # Конвертируем в MultiDiGraph с правильными типами данных
+            self.graph = nx.MultiDiGraph()
+            for node_id, data in loaded_graph.nodes(data=True):
+                # Преобразуем строковые представления обратно в типы
+                clean_data = {}
+                for key, value in data.items():
+                    if key == 'metadata':
+                        clean_data[key] = json.loads(value) if isinstance(value, str) else value
+                    elif key == 'embeddings':
+                        clean_data[key] = json.loads(value) if isinstance(value, str) and value != '[]' else None
+                    elif key == 'node_type':
+                        clean_data[key] = value  # Будет преобразован в Node.from_dict
+                    elif key in ('strength', 'decay_rate', 'weight'):
+                        clean_data[key] = float(value) if isinstance(value, str) else value
+                    else:
+                        clean_data[key] = value
+                self.graph.add_node(node_id, **clean_data)
+            
+            for source, target, key, data in loaded_graph.edges(keys=True, data=True):
+                clean_data = {}
+                for k, v in data.items():
+                    if k == 'metadata':
+                        clean_data[k] = json.loads(v) if isinstance(v, str) else v
+                    elif k == 'edge_type':
+                        clean_data[k] = v
+                    elif k == 'weight':
+                        clean_data[k] = float(v) if isinstance(v, str) else v
+                    else:
+                        clean_data[k] = v
+                self.graph.add_edge(source, target, key=key, **clean_data)
+        
+        # Загружаем фрагменты
+        fragments_path = self.storage_path.with_suffix('.fragments.json')
+        if fragments_path.exists():
+            with open(fragments_path, 'r', encoding='utf-8') as f:
+                fragments_data = json.load(f)
+                self.fragments = {
+                    frag['id']: KnowledgeFragment.from_dict(frag)
+                    for frag in fragments_data
+                }
+    
+    # === Статистика ===
+    
+    def get_stats(self) -> Dict[str, Any]:
+        """Получить статистику графа."""
+        nodes = self.get_all_nodes()
+        edges = self.get_all_edges()
+        
+        # Распределение типов узлов
+        node_types_count = {}
+        for node in nodes:
+            node_type = node.node_type.value
+            node_types_count[node_type] = node_types_count.get(node_type, 0) + 1
+        
+        # Распределение типов связей
+        edge_types_count = {}
+        for edge in edges:
+            edge_type = edge.edge_type.value
+            edge_types_count[edge_type] = edge_types_count.get(edge_type, 0) + 1
+        
+        return {
+            'total_nodes': len(nodes),
+            'total_edges': len(edges),
+            'total_fragments': len(self.fragments),
+            'node_types': node_types_count,
+            'edge_types': edge_types_count,
+            'avg_node_strength': sum(n.strength for n in nodes) / len(nodes) if nodes else 0,
+            'forgotten_nodes_count': len(self.get_forgotten_nodes()),
+        }
