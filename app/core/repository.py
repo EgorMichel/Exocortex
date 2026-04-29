@@ -37,8 +37,11 @@ class GraphRepository:
         self.storage_path = Path(storage_path) if storage_path else None
         self.fragments: Dict[str, KnowledgeFragment] = {}
         
-        if self.storage_path and self.storage_path.exists():
-            self.load()
+        # Проверяем существование файла графа (с расширением .gexf)
+        if self.storage_path:
+            gexf_path = self.storage_path.with_suffix('.gexf')
+            if gexf_path.exists():
+                self.load()
     
     # === Операции с узлами ===
     
@@ -237,9 +240,9 @@ class GraphRepository:
         if not self.storage_path:
             raise ValueError("storage_path не указан")
         
-        # Сохраняем граф как GraphML
-        graphml_path = self.storage_path.with_suffix('.graphml')
-        nx.write_graphml(self.graph, graphml_path)
+        # Сохраняем граф как GEXF (лучше поддерживает MultiDiGraph)
+        gexf_path = self.storage_path.with_suffix('.gexf')
+        nx.write_gexf(self.graph, gexf_path)
         
         # Сохраняем фрагменты отдельно как JSON
         fragments_path = self.storage_path.with_suffix('.fragments.json')
@@ -256,40 +259,36 @@ class GraphRepository:
         if not self.storage_path:
             raise ValueError("storage_path не указан")
         
-        # Загружаем граф
-        graphml_path = self.storage_path.with_suffix('.graphml')
-        if graphml_path.exists():
-            loaded_graph = nx.read_graphml(graphml_path)
-            # Конвертируем в MultiDiGraph с правильными типами данных
-            self.graph = nx.MultiDiGraph()
-            for node_id, data in loaded_graph.nodes(data=True):
-                # Преобразуем строковые представления обратно в типы
-                clean_data = {}
-                for key, value in data.items():
-                    if key == 'metadata':
-                        clean_data[key] = json.loads(value) if isinstance(value, str) else value
-                    elif key == 'embeddings':
-                        clean_data[key] = json.loads(value) if isinstance(value, str) and value != '[]' else None
-                    elif key == 'node_type':
-                        clean_data[key] = value  # Будет преобразован в Node.from_dict
-                    elif key in ('strength', 'decay_rate', 'weight'):
-                        clean_data[key] = float(value) if isinstance(value, str) else value
-                    else:
-                        clean_data[key] = value
-                self.graph.add_node(node_id, **clean_data)
+        # Загружаем граф (GEXF формат)
+        gexf_path = self.storage_path.with_suffix('.gexf')
+        if gexf_path.exists():
+            loaded_graph = nx.read_gexf(gexf_path)
+            # Конвертируем в MultiDiGraph - read_gexf возвращает DiGraph
+            self.graph = nx.MultiDiGraph(loaded_graph)
             
-            for source, target, key, data in loaded_graph.edges(keys=True, data=True):
-                clean_data = {}
+            # Обрабатываем атрибуты узлов
+            for node_id in self.graph.nodes():
+                data = dict(self.graph.nodes[node_id])
+                # Преобразуем строковые представления обратно в типы
+                if 'metadata' in data and isinstance(data['metadata'], str):
+                    data['metadata'] = json.loads(data['metadata'])
+                if 'embeddings' in data and isinstance(data['embeddings'], str):
+                    data['embeddings'] = json.loads(data['embeddings']) if data['embeddings'] != '[]' else None
+                # Обновляем данные узла
+                for key, value in data.items():
+                    if key in ('strength', 'decay_rate'):
+                        self.graph.nodes[node_id][key] = float(value) if isinstance(value, str) else value
+            
+            # Обрабатываем атрибуты связей
+            for source, target, key in self.graph.edges(keys=True):
+                data = dict(self.graph.edges[source, target, key])
+                if 'metadata' in data and isinstance(data['metadata'], str):
+                    data['metadata'] = json.loads(data['metadata'])
+                if 'weight' in data:
+                    data['weight'] = float(data['weight']) if isinstance(data['weight'], str) else data['weight']
+                # Обновляем данные связи
                 for k, v in data.items():
-                    if k == 'metadata':
-                        clean_data[k] = json.loads(v) if isinstance(v, str) else v
-                    elif k == 'edge_type':
-                        clean_data[k] = v
-                    elif k == 'weight':
-                        clean_data[k] = float(v) if isinstance(v, str) else v
-                    else:
-                        clean_data[k] = v
-                self.graph.add_edge(source, target, key=key, **clean_data)
+                    self.graph.edges[source, target, key][k] = v
         
         # Загружаем фрагменты
         fragments_path = self.storage_path.with_suffix('.fragments.json')
