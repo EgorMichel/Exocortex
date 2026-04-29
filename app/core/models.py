@@ -90,6 +90,9 @@ class Node:
     def from_dict(cls, data: Dict[str, Any]) -> 'Node':
         """Десериализация узла из словаря."""
         data = data.copy()
+        # Удаляем служебные атрибуты NetworkX, которые не являются частью модели Node
+        data.pop('label', None)
+        
         data['node_type'] = NodeType(data['node_type'])
         data['metadata'] = json.loads(data['metadata']) if isinstance(data.get('metadata'), str) else data['metadata']
         embeddings_data = data.get('embeddings')
