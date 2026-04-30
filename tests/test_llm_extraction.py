@@ -3,7 +3,7 @@
 Тесты для LLM пайплайна извлечения знаний.
 
 Проверяет:
-- Извлечение сущностей и связей (с fallback без API ключа)
+- Извлечение сущностей и связей через LLM
 - Конвертацию в узлы и связи графа
 - Сохранение в репозиторий
 """
@@ -19,6 +19,14 @@ from app.llm.extraction import (
 )
 from app.core.repository import GraphRepository
 from app.core.models import KnowledgeFragment, NodeType, EdgeType
+
+
+def _disable_llm_env(monkeypatch):
+    monkeypatch.setenv("LLM_PROVIDER", "openai")
+    monkeypatch.setenv("LLM_API_KEY", "")
+    monkeypatch.setenv("OPENAI_API_KEY", "")
+    monkeypatch.setenv("LLM_API_BASE", "")
+    monkeypatch.setenv("OPENAI_API_BASE", "")
 
 
 class TestLLMExtraction:
@@ -41,42 +49,17 @@ class TestLLMExtraction:
         assert service.base_url == "http://127.0.0.1:11434/v1"
         assert service.client is not None
     
-    def test_fallback_extraction_basic(self):
-        """Тест эвристического извлечения без LLM API."""
-        service = LLMService(api_key=None)  # Явно указываем отсутствие ключа
-        
-        text = """
-        Искусственный интеллект - это область компьютерных наук.
-        Машинное обучение является частью искусственного интеллекта.
-        Глубокое обучение - это подраздел машинного обучения.
-        Нейронные сети используются в глубоком обучении.
-        """
-        
-        result = asyncio.run(service.extract_knowledge(text))
-        
-        assert isinstance(result, ExtractionResult)
-        assert len(result.entities) > 0
-        assert len(result.summary) > 0
-        
-        # Проверяем, что сущности имеют правильные типы
-        for entity in result.entities:
-            assert entity.type in ['fact', 'concept', 'thesis', 'definition', 'question']
-            assert len(entity.description) > 0
-    
-    def test_fallback_extraction_with_question(self):
-        """Тест извлечения вопроса."""
+    def test_extraction_without_llm_client_returns_empty_result(self, monkeypatch, capsys):
+        """Without a configured LLM client, no algorithmic extraction is used."""
+        _disable_llm_env(monkeypatch)
         service = LLMService(api_key=None)
-        
-        text = "Что такое машинное обучение? Это область ИИ."
-        result = asyncio.run(service.extract_knowledge(text))
-        
-        assert len(result.entities) > 0
-        
-        # Хотя бы одна сущность должна быть вопросом
-        question_entities = [e for e in result.entities if e.type == 'question']
-        # Не гарантируем, но проверяем если есть
-        if question_entities:
-            assert "?" in question_entities[0].description
+
+        result = asyncio.run(service.extract_knowledge(
+            "Python is a programming language. It supports automation."
+        ))
+
+        assert result == ExtractionResult()
+        assert "no LLM client configured" in capsys.readouterr().out
     
     def test_extraction_result_to_graph_elements(self):
         """Тест конвертации результата извлечения в элементы графа."""
@@ -172,8 +155,8 @@ class TestLLMExtraction:
 
         assert result["summary"] == "ok"
 
-    def test_extract_knowledge_falls_back_when_llm_content_is_none(self, capsys):
-        """Empty content from an OpenAI-compatible API should use fallback."""
+    def test_extract_knowledge_returns_empty_when_llm_content_is_none(self, capsys):
+        """Empty content from an OpenAI-compatible API should return an empty result."""
 
         class FakeCompletions:
             async def create(self, **kwargs):
@@ -200,14 +183,26 @@ class TestLLMExtraction:
 
         result = asyncio.run(service.extract_knowledge("Python is a programming language. It supports automation."))
 
-        assert isinstance(result, ExtractionResult)
-        assert len(result.entities) > 0
+        assert result == ExtractionResult()
         assert "finish_reason=length" in capsys.readouterr().out
     
     def test_extract_and_store_integration(self, tmp_path):
         """Интеграционный тест полного пайплайна извлечения и сохранения."""
         storage_file = tmp_path / "test_graph"
         repository = GraphRepository(storage_path=str(storage_file))
+
+        class FakeLLMService(LLMService):
+            async def extract_knowledge(self, text):
+                return ExtractionResult(
+                    entities=[
+                        ExtractedEntity(
+                            name="Python",
+                            type="concept",
+                            description="Python is a programming language",
+                        )
+                    ],
+                    summary="Python is a programming language.",
+                )
         
         text = """
         Python - это язык программирования высокого уровня.
@@ -219,7 +214,8 @@ class TestLLMExtraction:
             text=text,
             repository=repository,
             source_type='test',
-            source_url=None
+            source_url=None,
+            llm_service=FakeLLMService(api_key=None),
         ))
         
         assert fragment is not None
@@ -235,36 +231,58 @@ class TestLLMExtraction:
         assert stats['total_nodes'] > 0
         assert stats['total_fragments'] > 0
 
+    def test_extract_and_store_without_llm_stores_fragment_only(self, monkeypatch, tmp_path):
+        """No LLM client means the source fragment is saved without inferred nodes."""
+        _disable_llm_env(monkeypatch)
+        storage_file = tmp_path / "test_graph"
+        repository = GraphRepository(storage_path=str(storage_file))
+
+        fragment = asyncio.run(extract_and_store(
+            text="Python is a programming language.",
+            repository=repository,
+            source_type='test',
+            source_url=None,
+            llm_service=LLMService(api_key=None),
+        ))
+
+        assert fragment.id is not None
+        assert fragment.extracted_nodes == []
+        assert repository.get_all_nodes() == []
+        assert repository.get_stats()['total_fragments'] == 1
+
 
 class TestExtractionEdgeCases:
     """Тесты граничных случаев."""
     
-    def test_empty_text(self):
+    def test_empty_text(self, monkeypatch):
         """Тест обработки пустого текста."""
+        _disable_llm_env(monkeypatch)
         service = LLMService(api_key=None)
         result = asyncio.run(service.extract_knowledge(""))
         
         assert isinstance(result, ExtractionResult)
         # Пустой или минимальный результат допустим
     
-    def test_very_short_text(self):
+    def test_very_short_text(self, monkeypatch):
         """Тест обработки очень короткого текста."""
+        _disable_llm_env(monkeypatch)
         service = LLMService(api_key=None)
         result = asyncio.run(service.extract_knowledge("Привет"))
         
         assert isinstance(result, ExtractionResult)
     
-    def test_single_sentence(self):
+    def test_single_sentence(self, monkeypatch):
         """Тест обработки одного предложения."""
+        _disable_llm_env(monkeypatch)
         service = LLMService(api_key=None)
         text = "Искусственный интеллект изменяет мир."
         result = asyncio.run(service.extract_knowledge(text))
         
-        assert len(result.entities) >= 0  # Может не извлечь ничего meaningful
-        assert result.summary
+        assert result == ExtractionResult()
     
-    def test_long_text_truncation(self):
+    def test_long_text_truncation(self, monkeypatch):
         """Тест что длинный текст обрабатывается корректно."""
+        _disable_llm_env(monkeypatch)
         service = LLMService(api_key=None)
         
         # Создаём длинный текст (100+ предложений)
@@ -273,9 +291,7 @@ class TestExtractionEdgeCases:
         
         result = asyncio.run(service.extract_knowledge(text))
         
-        assert isinstance(result, ExtractionResult)
-        # Проверяем что результат не пустой
-        assert len(result.summary) > 0
+        assert result == ExtractionResult()
 
 
 if __name__ == "__main__":

@@ -154,8 +154,8 @@ Respond in JSON format only.
             ExtractionResult с извлечёнными сущностями и связями
         """
         if not self.client:
-            # Fallback: простой эвристический парсинг без LLM
-            return self._extract_knowledge_fallback(text)
+            print("LLM extraction skipped: no LLM client configured.")
+            return ExtractionResult()
         
         try:
             prompt = self._get_extraction_prompt(text)
@@ -183,15 +183,11 @@ Respond in JSON format only.
             
             # Парсим JSON ответ
             result_data = self._parse_json_response(result_text)
-            result = self._coerce_extraction_result(result_data)
-            if not result.entities and not result.summary:
-                return self._extract_knowledge_fallback(text)
-            return result
+            return self._coerce_extraction_result(result_data)
             
         except Exception as e:
             print(f"Error during LLM extraction: {e}")
-            # Fallback к эвристическому методу
-            return self._extract_knowledge_fallback(text)
+            return ExtractionResult()
 
     def _parse_json_response(self, result_text: str) -> Dict[str, Any]:
         """Parse JSON, including responses wrapped in prose or code fences."""
@@ -235,60 +231,6 @@ Respond in JSON format only.
             entities=entities,
             relations=relations,
             summary=summary,
-        )
-    
-    def _extract_knowledge_fallback(self, text: str) -> ExtractionResult:
-        """
-        Эвристическое извлечение без LLM (fallback).
-        
-        Использует простые правила для извлечения базовой структуры.
-        """
-        # Разбиваем текст на предложения
-        sentences = [s.strip() for s in text.replace('\n', '.').split('.') if s.strip()]
-        
-        entities = []
-        relations = []
-        
-        # Простое эвристическое извлечение
-        for i, sentence in enumerate(sentences[:10]):  # Ограничиваем первыми 10 предложениями
-            if len(sentence) > 20:  # Пропускаем очень короткие
-                # Определяем тип по ключевым словам
-                node_type = "fact"
-                if any(word in sentence.lower() for word in ["это", "является", "представляет"]):
-                    node_type = "definition"
-                elif any(word in sentence.lower() for word in ["должен", "следует", "важно"]):
-                    node_type = "thesis"
-                elif "?" in sentence:
-                    node_type = "question"
-                elif any(word in sentence.lower() for word in ["концепция", "идея", "принцип"]):
-                    node_type = "concept"
-                
-                # Создаём сущность
-                entity_name = sentence[:50] + "..." if len(sentence) > 50 else sentence
-                entities.append(ExtractedEntity(
-                    name=entity_name,
-                    type=node_type,
-                    description=sentence,
-                    confidence=0.7
-                ))
-                
-                # Создаём связи между последовательными предложениями
-                if i > 0:
-                    prev_name = sentences[i-1][:50] + "..." if len(sentences[i-1]) > 50 else sentences[i-1]
-                    relations.append(ExtractedRelation(
-                        source=prev_name,
-                        target=entity_name,
-                        type="related_to",
-                        description="Последовательное упоминание",
-                        confidence=0.5
-                    ))
-        
-        summary = text[:200] + "..." if len(text) > 200 else text
-        
-        return ExtractionResult(
-            entities=entities,
-            relations=relations,
-            summary=summary
         )
     
     def extraction_result_to_graph_elements(

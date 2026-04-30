@@ -7,7 +7,7 @@ from app.core.models import Node
 from app.core.repository import GraphRepository
 
 
-def _force_fallback_llm(monkeypatch):
+def _disable_llm(monkeypatch):
     monkeypatch.setenv("LLM_PROVIDER", "openai")
     monkeypatch.setenv("LLM_API_KEY", "")
     monkeypatch.setenv("OPENAI_API_KEY", "")
@@ -23,7 +23,7 @@ def test_load_settings_reads_env(monkeypatch, tmp_path):
     monkeypatch.setenv("LLM_MODEL", "test-model")
     monkeypatch.setenv("LLM_API_BASE", "https://example.test/v1")
 
-    settings = load_settings()
+    settings = load_settings(env_path=tmp_path / "missing.env")
 
     assert settings.storage_path == str(storage_path)
     assert settings.llm_provider == "openai"
@@ -44,7 +44,7 @@ def test_load_settings_supports_ollama(monkeypatch, tmp_path):
     monkeypatch.setenv("LLM_API_BASE", "")
     monkeypatch.setenv("OPENAI_API_BASE", "")
 
-    settings = load_settings()
+    settings = load_settings(env_path=tmp_path / "missing.env")
 
     assert settings.storage_path == str(storage_path)
     assert settings.llm_provider == "ollama"
@@ -65,7 +65,7 @@ def test_repository_save_creates_storage_directory(tmp_path):
 
 
 def test_api_add_knowledge_uses_configured_storage(monkeypatch, tmp_path):
-    _force_fallback_llm(monkeypatch)
+    _disable_llm(monkeypatch)
     storage_path = tmp_path / "api_graph"
     monkeypatch.setenv("STORAGE_PATH", str(storage_path))
     routes._repository = None
@@ -79,12 +79,12 @@ def test_api_add_knowledge_uses_configured_storage(monkeypatch, tmp_path):
 
     assert response.status_code == 200
     payload = response.json()
-    assert payload["nodes_created"] > 0
+    assert payload["nodes_created"] == 0
     assert storage_path.with_suffix(".gexf").exists()
 
 
 def test_cli_add_stats_search_and_clear(monkeypatch, tmp_path, capsys):
-    _force_fallback_llm(monkeypatch)
+    _disable_llm(monkeypatch)
     storage_path = tmp_path / "cli_graph"
     monkeypatch.setenv("STORAGE_PATH", str(storage_path))
 
@@ -98,7 +98,7 @@ def test_cli_add_stats_search_and_clear(monkeypatch, tmp_path, capsys):
 
     assert cli.main(["search", "Python"]) == 0
     search_output = capsys.readouterr().out
-    assert "Python" in search_output
+    assert "No nodes found." in search_output
 
     assert cli.main(["clear"]) == 0
     assert not storage_path.with_suffix(".gexf").exists()
