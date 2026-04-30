@@ -5,6 +5,15 @@
 ## [Unreleased]
 
 ### Добавлено
+- **Запуск приложения**:
+  - Точка входа `python -m app.main` для FastAPI-сервера
+  - CLI `python -m app.cli` с командами `add`, `stats`, `list`, `search`, `forgotten`, `clear`
+  - Dockerfile и `docker-compose.yml`
+- **Конфигурация**:
+  - Загрузка `config/.env`
+  - Поддержка `LLM_PROVIDER`, `LLM_API_KEY`, `LLM_MODEL`, `LLM_API_BASE`, `OLLAMA_BASE_URL`, `STORAGE_PATH`
+  - Локальный LLM-провайдер Ollama через OpenAI-compatible API
+  - Автоматическое создание директории хранения графа
 - **Базовая структура проекта**: Модульная архитектура с разделением на `core`, `agents`, `llm`, `api`, `services`, `utils`
 - **Модели данных** (`app/core/models.py`):
   - `Node`: Узел графа знаний с полями id, тип, содержание, метаданные, параметры памяти (strength, decay_rate, last_interacted)
@@ -26,13 +35,13 @@
   - Поддержка различных типов узлов и связей
 - **API слой** (`app/api/routes.py`):
   - REST эндпоинты для управления графом знаний
-  - Эндпоинты: GET /nodes, POST /nodes, GET /stats, POST /extract
+  - Эндпоинты: GET /api/nodes, POST /api/knowledge, GET /api/stats, GET /api/fragments
 - **Агент** (`app/agents/`):
   - Заготовка для проактивного агента
 - **Конфигурация** (`config/`):
   - Базовые конфигурационные файлы
 - **Тесты** (`tests/`):
-  - 42 теста для моделей данных, репозитория и LLM-извлечения
+  - 52 теста для моделей данных, репозитория, LLM-извлечения, API-конфигурации и CLI
   - Покрытие тестами основных операций CRUD
   - Тесты сохранения/загрузки графа
 
