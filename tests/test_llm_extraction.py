@@ -23,6 +23,23 @@ from app.core.models import KnowledgeFragment, NodeType, EdgeType
 
 class TestLLMExtraction:
     """Тесты для LLM сервиса извлечения знаний."""
+
+    def test_ollama_provider_uses_local_openai_compatible_client(self, monkeypatch):
+        """Ollama works without a third-party API key."""
+        monkeypatch.setenv("LLM_API_KEY", "")
+        monkeypatch.setenv("OPENAI_API_KEY", "")
+
+        service = LLMService(
+            provider="ollama",
+            model="llama3.1",
+            base_url="http://127.0.0.1:11434",
+        )
+
+        assert service.provider == "ollama"
+        assert service.api_key == "ollama"
+        assert service.model == "llama3.1"
+        assert service.base_url == "http://127.0.0.1:11434/v1"
+        assert service.client is not None
     
     def test_fallback_extraction_basic(self):
         """Тест эвристического извлечения без LLM API."""
@@ -114,6 +131,78 @@ class TestLLMExtraction:
         # Проверяем метаданные
         assert 'source' in nodes[0].metadata
         assert nodes[0].metadata['source'] == fragment.id
+
+    def test_coerce_extraction_result_skips_malformed_items(self):
+        """Некорректные элементы ответа LLM не ломают весь результат."""
+        service = LLMService(api_key=None)
+
+        result = service._coerce_extraction_result({
+            "entities": [
+                {"": ""},
+                {
+                    "name": "Python",
+                    "type": "concept",
+                    "description": "A programming language",
+                    "confidence": 0.9,
+                },
+            ],
+            "relations": [
+                {"source": "Python"},
+                {
+                    "source": "Python",
+                    "target": "Data analysis",
+                    "type": "related_to",
+                    "description": "Python is used for data analysis",
+                    "confidence": 0.8,
+                },
+            ],
+            "summary": "Python is useful.",
+        })
+
+        assert len(result.entities) == 1
+        assert result.entities[0].name == "Python"
+        assert len(result.relations) == 1
+        assert result.summary == "Python is useful."
+
+    def test_parse_json_response_from_code_fence(self):
+        """JSON можно извлечь из ответа с обёрткой."""
+        service = LLMService(api_key=None)
+
+        result = service._parse_json_response('```json\n{"entities": [], "relations": [], "summary": "ok"}\n```')
+
+        assert result["summary"] == "ok"
+
+    def test_extract_knowledge_falls_back_when_llm_content_is_none(self, capsys):
+        """Empty content from an OpenAI-compatible API should use fallback."""
+
+        class FakeCompletions:
+            async def create(self, **kwargs):
+                class Message:
+                    content = None
+
+                class Choice:
+                    message = Message()
+                    finish_reason = "length"
+
+                class Response:
+                    choices = [Choice()]
+
+                return Response()
+
+        class FakeChat:
+            completions = FakeCompletions()
+
+        class FakeClient:
+            chat = FakeChat()
+
+        service = LLMService(api_key=None)
+        service.client = FakeClient()
+
+        result = asyncio.run(service.extract_knowledge("Python is a programming language. It supports automation."))
+
+        assert isinstance(result, ExtractionResult)
+        assert len(result.entities) > 0
+        assert "finish_reason=length" in capsys.readouterr().out
     
     def test_extract_and_store_integration(self, tmp_path):
         """Интеграционный тест полного пайплайна извлечения и сохранения."""

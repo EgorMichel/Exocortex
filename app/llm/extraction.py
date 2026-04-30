@@ -9,7 +9,7 @@ LLM-сервис для извлечения знаний из текста.
 
 import json
 from typing import List, Dict, Any, Optional, Tuple
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ValidationError
 import os
 
 from app.core.models import Node, Edge, NodeType, EdgeType, KnowledgeFragment
@@ -48,24 +48,57 @@ class LLMService:
     - Локальные модели через Ollama (опционально)
     """
     
-    def __init__(self, api_key: Optional[str] = None, model: str = "gpt-4o-mini"):
+    def __init__(
+        self,
+        api_key: Optional[str] = None,
+        model: Optional[str] = None,
+        base_url: Optional[str] = None,
+        provider: Optional[str] = None,
+    ):
         """
         Инициализация LLM сервиса.
         
         Args:
-            api_key: API ключ для OpenAI. Если None, берётся из OPENAI_API_KEY env.
+            api_key: API ключ. Если None, берётся из LLM_API_KEY или OPENAI_API_KEY env.
             model: Название модели для использования
+            base_url: OpenAI-compatible API base URL
         """
-        self.api_key = api_key or os.getenv("OPENAI_API_KEY")
-        self.model = model
+        self.provider = (provider or os.getenv("LLM_PROVIDER", "openai")).strip().lower()
+        if self.provider == "local":
+            self.provider = "ollama"
+
+        if self.provider == "ollama":
+            self.api_key = api_key or os.getenv("LLM_API_KEY") or "ollama"
+            self.model = model or os.getenv("LLM_MODEL") or os.getenv("OLLAMA_MODEL") or "llama3.1"
+            self.base_url = self._normalize_ollama_base_url(
+                base_url
+                or os.getenv("LLM_API_BASE")
+                or os.getenv("OLLAMA_BASE_URL")
+                or "http://localhost:11434"
+            )
+        else:
+            self.api_key = api_key or os.getenv("LLM_API_KEY") or os.getenv("OPENAI_API_KEY")
+            self.model = model or os.getenv("LLM_MODEL", "gpt-4o-mini")
+            self.base_url = base_url or os.getenv("LLM_API_BASE") or os.getenv("OPENAI_API_BASE")
         self.client = None
         
         if self.api_key:
             try:
-                from openai import OpenAI
-                self.client = OpenAI(api_key=self.api_key)
+                from openai import AsyncOpenAI
+
+                client_kwargs = {"api_key": self.api_key}
+                if self.base_url:
+                    client_kwargs["base_url"] = self.base_url
+                self.client = AsyncOpenAI(**client_kwargs)
             except ImportError:
                 print("Warning: openai package not installed. LLM features will be limited.")
+
+    def _normalize_ollama_base_url(self, base_url: str) -> str:
+        """Return Ollama's OpenAI-compatible API base URL."""
+        normalized = base_url.rstrip("/")
+        if normalized.endswith("/v1"):
+            return normalized
+        return f"{normalized}/v1"
     
     def _get_extraction_prompt(self, text: str) -> str:
         """Создать промпт для извлечения сущностей и связей."""
@@ -130,24 +163,79 @@ Respond in JSON format only.
             response = await self.client.chat.completions.create(
                 model=self.model,
                 messages=[
-                    {"role": "system", "content": "You are a knowledge extraction assistant. Always respond with valid JSON only."},
+                    {"role": "system", "content": "You are a knowledge extraction assistant. Always respond with valid JSON only. Respond in the language in which you received the information."},
                     {"role": "user", "content": prompt}
                 ],
                 temperature=0.3,
-                max_tokens=2000,
+                max_tokens=8000,
                 response_format={"type": "json_object"}
             )
             
-            result_text = response.choices[0].message.content.strip()
+            choice = response.choices[0]
+            result_text = choice.message.content
+            if not isinstance(result_text, str) or not result_text.strip():
+                finish_reason = getattr(choice, "finish_reason", None) or "unknown"
+                raise ValueError(
+                    "LLM response did not contain text content "
+                    f"(finish_reason={finish_reason})"
+                )
+            result_text = result_text.strip()
             
             # Парсим JSON ответ
-            result_data = json.loads(result_text)
-            return ExtractionResult(**result_data)
+            result_data = self._parse_json_response(result_text)
+            result = self._coerce_extraction_result(result_data)
+            if not result.entities and not result.summary:
+                return self._extract_knowledge_fallback(text)
+            return result
             
         except Exception as e:
             print(f"Error during LLM extraction: {e}")
             # Fallback к эвристическому методу
             return self._extract_knowledge_fallback(text)
+
+    def _parse_json_response(self, result_text: str) -> Dict[str, Any]:
+        """Parse JSON, including responses wrapped in prose or code fences."""
+        try:
+            return json.loads(result_text)
+        except json.JSONDecodeError:
+            start = result_text.find("{")
+            end = result_text.rfind("}")
+            if start == -1 or end == -1 or end <= start:
+                raise
+            return json.loads(result_text[start:end + 1])
+
+    def _coerce_extraction_result(self, result_data: Dict[str, Any]) -> ExtractionResult:
+        """Build an extraction result while skipping malformed LLM items."""
+        if not isinstance(result_data, dict):
+            return ExtractionResult()
+
+        entities = []
+        for item in result_data.get("entities", []):
+            if not isinstance(item, dict):
+                continue
+            try:
+                entities.append(ExtractedEntity(**item))
+            except ValidationError:
+                continue
+
+        relations = []
+        for item in result_data.get("relations", []):
+            if not isinstance(item, dict):
+                continue
+            try:
+                relations.append(ExtractedRelation(**item))
+            except ValidationError:
+                continue
+
+        summary = result_data.get("summary", "")
+        if not isinstance(summary, str):
+            summary = ""
+
+        return ExtractionResult(
+            entities=entities,
+            relations=relations,
+            summary=summary,
+        )
     
     def _extract_knowledge_fallback(self, text: str) -> ExtractionResult:
         """

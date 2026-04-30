@@ -7,13 +7,13 @@ REST API для Exocortex.
 - Получения статистики
 """
 
-from fastapi import FastAPI, HTTPException, BackgroundTasks
+from contextlib import asynccontextmanager
+from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel, Field
 from typing import Optional, List, Dict, Any
-import asyncio
 
+from app.config import load_settings
 from app.core.repository import GraphRepository
-from app.core.models import KnowledgeFragment, Node, Edge
 from app.llm.extraction import extract_and_store, LLMService
 
 
@@ -77,12 +77,29 @@ class EdgeListResponse(BaseModel):
     total: int
 
 
+# === Lifecycle ===
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """Initialize and persist repository around application lifetime."""
+    repository = get_repository()
+    print(f"Exocortex started. Graph loaded with {len(repository.get_all_nodes())} nodes.")
+    try:
+        yield
+    finally:
+        repository = get_repository()
+        if repository.storage_path:
+            repository.save()
+            print("Graph saved to disk.")
+
+
 # === Создание приложения FastAPI ===
 
 app = FastAPI(
     title="Exocortex API",
     description="API для системы управления персональными знаниями",
-    version="0.1.0"
+    version="0.1.0",
+    lifespan=lifespan,
 )
 
 # Глобальный репозиторий (в будущем можно вынести в dependency injection)
@@ -94,7 +111,8 @@ def get_repository() -> GraphRepository:
     """Получить или создать репозиторий."""
     global _repository
     if _repository is None:
-        _repository = GraphRepository(storage_path="data/knowledge_graph")
+        settings = load_settings()
+        _repository = GraphRepository(storage_path=settings.storage_path)
     return _repository
 
 
@@ -102,7 +120,13 @@ def get_llm_service() -> LLMService:
     """Получить или создать LLM сервис."""
     global _llm_service
     if _llm_service is None:
-        _llm_service = LLMService()
+        settings = load_settings()
+        _llm_service = LLMService(
+            provider=settings.llm_provider,
+            api_key=settings.llm_api_key,
+            model=settings.llm_model,
+            base_url=settings.llm_api_base,
+        )
     return _llm_service
 
 
@@ -325,22 +349,3 @@ async def delete_edge(edge_id: str):
         repository.save()
     
     return {"message": "Edge deleted", "edge_id": edge_id}
-
-
-# === Lifecycle events ===
-
-@app.on_event("startup")
-async def startup_event():
-    """Инициализация при запуске приложения."""
-    # Инициализируем репозиторий
-    repository = get_repository()
-    print(f"Exocortex started. Graph loaded with {len(repository.get_all_nodes())} nodes.")
-
-
-@app.on_event("shutdown")
-async def shutdown_event():
-    """Очистка при остановке приложения."""
-    repository = get_repository()
-    if repository.storage_path:
-        repository.save()
-        print("Graph saved to disk.")
