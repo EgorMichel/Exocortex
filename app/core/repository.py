@@ -5,10 +5,13 @@
 В будущем может быть заменён на Neo4j или другую графовую БД.
 """
 
+import ast
 import json
+from io import BytesIO
 from pathlib import Path
 from typing import Optional, List, Dict, Any
 from datetime import datetime
+import xml.etree.ElementTree as ET
 import networkx as nx
 
 from app.core.models import Node, Edge, NodeType, EdgeType, KnowledgeFragment
@@ -239,6 +242,8 @@ class GraphRepository:
         """Сохранить граф и фрагменты на диск."""
         if not self.storage_path:
             raise ValueError("storage_path не указан")
+
+        self.storage_path.parent.mkdir(parents=True, exist_ok=True)
         
         # Сохраняем граф как GEXF (лучше поддерживает MultiDiGraph)
         gexf_path = self.storage_path.with_suffix('.gexf')
@@ -262,16 +267,15 @@ class GraphRepository:
         # Загружаем граф (GEXF формат)
         gexf_path = self.storage_path.with_suffix('.gexf')
         if gexf_path.exists():
-            loaded_graph = nx.read_gexf(gexf_path)
-            # Конвертируем в MultiDiGraph - read_gexf возвращает DiGraph
-            self.graph = nx.MultiDiGraph(loaded_graph)
+            loaded_graph = self._read_gexf_safely(gexf_path)
+            self.graph = self._normalize_loaded_graph(loaded_graph)
             
             # Обрабатываем атрибуты узлов
             for node_id in self.graph.nodes():
                 data = dict(self.graph.nodes[node_id])
                 # Преобразуем строковые представления обратно в типы
                 if 'metadata' in data and isinstance(data['metadata'], str):
-                    data['metadata'] = json.loads(data['metadata'])
+                    data['metadata'] = self._decode_mapping(data['metadata'])
                 if 'embeddings' in data and isinstance(data['embeddings'], str):
                     data['embeddings'] = json.loads(data['embeddings']) if data['embeddings'] != '[]' else None
                 # Обновляем данные узла
@@ -283,7 +287,7 @@ class GraphRepository:
             for source, target, key in self.graph.edges(keys=True):
                 data = dict(self.graph.edges[source, target, key])
                 if 'metadata' in data and isinstance(data['metadata'], str):
-                    data['metadata'] = json.loads(data['metadata'])
+                    data['metadata'] = self._decode_mapping(data['metadata'])
                 if 'weight' in data:
                     data['weight'] = float(data['weight']) if isinstance(data['weight'], str) else data['weight']
                 # Обновляем данные связи
@@ -299,6 +303,49 @@ class GraphRepository:
                     frag['id']: KnowledgeFragment.from_dict(frag)
                     for frag in fragments_data
                 }
+
+    def _read_gexf_safely(self, gexf_path: Path) -> nx.Graph:
+        """Read GEXF, tolerating older files with mixed networkx_key types."""
+        try:
+            return nx.read_gexf(gexf_path)
+        except ValueError as exc:
+            if "invalid literal for int()" not in str(exc):
+                raise
+
+            tree = ET.parse(gexf_path)
+            root = tree.getroot()
+            for element in root.iter():
+                if element.attrib.get("title") == "networkx_key":
+                    element.set("type", "string")
+
+            buffer = BytesIO()
+            tree.write(buffer, encoding="utf-8", xml_declaration=True)
+            buffer.seek(0)
+            return nx.read_gexf(buffer)
+
+    def _normalize_loaded_graph(self, loaded_graph: nx.Graph) -> nx.MultiDiGraph:
+        """Restore stable string edge keys after reading from GEXF."""
+        graph = nx.MultiDiGraph()
+
+        for node_id, data in loaded_graph.nodes(data=True):
+            graph.add_node(str(node_id), **dict(data))
+
+        for source, target, data in loaded_graph.edges(data=True):
+            edge_data = dict(data)
+            edge_id = str(edge_data.get('id') or edge_data.get('networkx_key') or len(graph.edges))
+            edge_data['id'] = edge_id
+            edge_data.pop('networkx_key', None)
+            graph.add_edge(str(source), str(target), key=edge_id, **edge_data)
+
+        return graph
+
+    def _decode_mapping(self, value: str) -> Dict[str, Any]:
+        """Decode metadata saved either as JSON or legacy Python repr."""
+        try:
+            decoded = json.loads(value)
+        except json.JSONDecodeError:
+            decoded = ast.literal_eval(value)
+        return decoded if isinstance(decoded, dict) else {}
     
     # === Статистика ===
     

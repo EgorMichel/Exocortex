@@ -445,6 +445,26 @@ class TestGraphRepository:
         loaded_node1 = new_repo.get_node(node1.id)
         assert loaded_node1 is not None
         assert loaded_node1.content == "Persistent node 1"
+
+    def test_save_load_add_edge_save_load_keeps_uuid_edge_keys(self, repo):
+        """Повторное сохранение после загрузки не ломает GEXF edge keys."""
+        node1 = Node(content="Node 1")
+        node2 = Node(content="Node 2")
+        repo.add_node(node1)
+        repo.add_node(node2)
+        repo.add_edge(Edge(source_id=node1.id, target_id=node2.id))
+        repo.save()
+
+        loaded_repo = GraphRepository(storage_path=str(repo.storage_path))
+        node3 = Node(content="Node 3")
+        loaded_repo.add_node(node3)
+        loaded_repo.add_edge(Edge(source_id=node2.id, target_id=node3.id))
+        loaded_repo.save()
+
+        reloaded_repo = GraphRepository(storage_path=str(repo.storage_path))
+
+        assert len(reloaded_repo.get_all_nodes()) == 3
+        assert len(reloaded_repo.get_all_edges()) == 2
     
     def test_get_forgotten_nodes(self, repo):
         """Получение забытых узлов."""
