@@ -139,6 +139,58 @@ def test_digest_prioritizes_contradictions_before_other_insights(tmp_path):
     ]
 
 
+def test_digest_uses_interest_profile_for_same_priority_insights(tmp_path):
+    repo = GraphRepository(storage_path=str(tmp_path / "graph"))
+    learning_node = Node(
+        content="Spaced repetition supports learning.",
+        metadata={"topic": "learning memory", "interest_score": 2.0},
+    )
+    generic_node = Node(
+        content="Generic archived note.",
+        metadata={"topic": "archive"},
+    )
+    repo.add_node(learning_node)
+    repo.add_node(generic_node)
+
+    class FakePersonalization:
+        def build_interest_profile(self):
+            return {
+                "total_feedback": 3,
+                "action_counts": {"useful": 3},
+                "top_topics": [{"topic": "learning", "score": 3}],
+                "message_style": "concise",
+            }
+
+    agent = ProactiveAgent(
+        repo,
+        settings=AgentSettings(digest_limit=1),
+        personalization_service=FakePersonalization(),
+    )
+    preferred = Insight(
+        insight_type=InsightType.REMINDER,
+        title="Learning reminder",
+        description="A long learning reminder that should be shortened when concise style is active.",
+        node_ids=[learning_node.id],
+        score=0.1,
+    )
+    generic = Insight(
+        insight_type=InsightType.REMINDER,
+        title="Generic reminder",
+        description="Generic reminder",
+        node_ids=[generic_node.id],
+        score=0.2,
+    )
+
+    digest = agent.generate_digest([generic, preferred])
+
+    assert digest.insights == [preferred]
+    personalization = preferred.metadata["personalization"]
+    assert personalization["matched_topics"] == ["learning"]
+    assert personalization["topic_boost"] > 0
+    assert personalization["node_boost"] > 0
+    assert personalization["message_style"] == "concise"
+
+
 def test_digest_renders_contradiction_statements():
     digest = Digest(
         insights=[

@@ -91,12 +91,14 @@ class ProactiveAgent:
         embedding_service: Optional[Any] = None,
         settings: Optional[AgentSettings] = None,
         insight_store: Optional[InsightStore] = None,
+        personalization_service: Optional[Any] = None,
     ) -> None:
         self.repository = repository
         self.llm_service = llm_service
         self.embedding_service = embedding_service or LocalTextEmbeddingService()
         self.settings = settings or AgentSettings()
         self.insight_store = insight_store or InsightStore(repository.storage_path)
+        self.personalization_service = personalization_service
 
     async def analyze(self, save: bool = True) -> Digest:
         """Run all graph analyzers and return a prioritized digest."""
@@ -214,6 +216,7 @@ class ProactiveAgent:
 
     def generate_digest(self, insights: list[Insight]) -> Digest:
         """Prioritize and limit insights for a compact digest."""
+        insights = self._personalize_insights(insights)
         priority = {
             InsightType.CONTRADICTION: 3,
             InsightType.REMINDER: 2,
@@ -229,6 +232,114 @@ class ProactiveAgent:
     def get_latest_digest(self) -> Optional[Digest]:
         """Load the latest persisted digest."""
         return self.insight_store.get_latest_digest()
+
+    def _personalize_insights(self, insights: list[Insight]) -> list[Insight]:
+        """Adjust insight scores and metadata from prior user feedback."""
+        profile = self._interest_profile()
+        if not profile or not profile.get("total_feedback"):
+            return insights
+
+        topic_scores = {
+            str(item["topic"]): float(item["score"])
+            for item in profile.get("top_topics", [])
+        }
+        action_counts = profile.get("action_counts", {})
+        message_style = str(profile.get("message_style") or "balanced")
+        personalized = []
+        for insight in insights:
+            base_score = insight.score
+            insight_topics = self._insight_topics(insight)
+            topic_boost = self._topic_boost(insight_topics, topic_scores)
+            node_boost = self._node_interest_boost(insight.node_ids)
+            type_factor = self._type_interest_factor(insight.insight_type, action_counts)
+            insight.score = max(0.0, min(1.5, (base_score * type_factor) + topic_boost + node_boost))
+            insight.metadata["personalization"] = {
+                "base_score": base_score,
+                "topic_boost": topic_boost,
+                "node_boost": node_boost,
+                "type_factor": type_factor,
+                "matched_topics": sorted(insight_topics & set(topic_scores)),
+                "message_style": message_style,
+            }
+            if message_style == "concise":
+                insight.description = self._shorten(insight.description, limit=100)
+            personalized.append(insight)
+        return personalized
+
+    def _interest_profile(self) -> dict[str, Any]:
+        """Build the current interest profile, if feedback storage is available."""
+        service = self.personalization_service
+        if service is None:
+            try:
+                from app.services.personalization import PersonalizationService
+            except ImportError:
+                return {}
+            service = PersonalizationService(
+                repository=self.repository,
+                insight_store=self.insight_store,
+            )
+        profile = service.build_interest_profile()
+        return profile if isinstance(profile, dict) else {}
+
+    def _insight_topics(self, insight: Insight) -> set[str]:
+        """Extract comparable topics from an insight and its nodes."""
+        topics = set(
+            term.lower()
+            for term in re.findall(
+                r"\w+",
+                " ".join(
+                    str(value)
+                    for value in (
+                        insight.title,
+                        insight.description,
+                        " ".join(map(str, insight.metadata.get("shared_terms", []))),
+                    )
+                ),
+                flags=re.UNICODE,
+            )
+            if len(term) > 2 and term.lower() not in STOPWORDS
+        )
+        for node_id in insight.node_ids:
+            node = self.repository.get_node(node_id)
+            if node:
+                topics.update(self._terms(node))
+        return topics
+
+    def _topic_boost(self, insight_topics: set[str], topic_scores: dict[str, float]) -> float:
+        if not insight_topics or not topic_scores:
+            return 0.0
+        boost = sum(min(0.06, max(0.0, topic_scores[topic]) * 0.03) for topic in insight_topics & set(topic_scores))
+        return min(0.18, boost)
+
+    def _node_interest_boost(self, node_ids: list[str]) -> float:
+        score = 0.0
+        for node_id in node_ids:
+            node = self.repository.get_node(node_id)
+            if not node:
+                continue
+            score += float(node.metadata.get("interest_score", 0.0)) * 0.04
+        return max(-0.12, min(0.16, score))
+
+    def _type_interest_factor(self, insight_type: InsightType, action_counts: dict[str, int]) -> float:
+        positive_by_type = {
+            InsightType.CONTRADICTION: (
+                action_counts.get("choose_left", 0)
+                + action_counts.get("choose_right", 0)
+                + action_counts.get("resolved", 0)
+                + action_counts.get("keep_both", 0)
+            ),
+            InsightType.HIDDEN_CONNECTION: (
+                action_counts.get("confirm", 0) + action_counts.get("refine", 0)
+            ),
+            InsightType.REMINDER: action_counts.get("useful", 0),
+        }
+        negative_by_type = {
+            InsightType.CONTRADICTION: 0,
+            InsightType.HIDDEN_CONNECTION: action_counts.get("reject", 0),
+            InsightType.REMINDER: action_counts.get("ignore", 0),
+        }
+        net = positive_by_type[insight_type] - negative_by_type[insight_type]
+        return max(0.85, min(1.2, 1.0 + (net * 0.04)))
 
     async def _detect_contradiction(self, left: Node, right: Node) -> dict[str, Any]:
         """Ask an LLM-like service whether two nodes contradict each other."""
