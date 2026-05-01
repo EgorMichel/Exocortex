@@ -188,16 +188,24 @@ class ProactiveAgent:
 
             confidence = float(detection.get("confidence", pair.score))
             reason = str(detection.get("reason") or "Potential contradiction detected.")
+            title = str(
+                detection.get("title")
+                or self._default_contradiction_title(pair.left.content, pair.right.content)
+            )
             insights.append(
                 Insight(
                     insight_type=InsightType.CONTRADICTION,
-                    title="Potential contradiction",
+                    title=title,
                     description=reason,
                     node_ids=[pair.left.id, pair.right.id],
                     score=max(confidence, pair.score),
                     metadata={
                         "candidate_score": pair.score,
                         "shared_terms": sorted(pair.shared_terms),
+                        "statement_a": pair.left.content,
+                        "statement_b": pair.right.content,
+                        "statement_a_node_id": pair.left.id,
+                        "statement_b_node_id": pair.right.id,
                     },
                 )
             )
@@ -242,7 +250,11 @@ class ProactiveAgent:
                 messages=[
                     {
                         "role": "system",
-                        "content": "You detect contradictions. Return JSON only.",
+                        "content": (
+                            "You detect contradictions. Return JSON only. "
+                            "Write title and reason in the same language as the compared statements. "
+                            "If the statements use different languages, use the language of Statement A."
+                        ),
                     },
                     {"role": "user", "content": prompt},
                 ],
@@ -332,9 +344,21 @@ class ProactiveAgent:
         normalized = " ".join(text.split())
         return normalized if len(normalized) <= limit else f"{normalized[: limit - 3]}..."
 
+    def _default_contradiction_title(self, left: str, right: str) -> str:
+        text = f"{left} {right}"
+        return "Потенциальное противоречие" if self._looks_cyrillic(text) else "Potential contradiction"
+
+    def _looks_cyrillic(self, text: str) -> bool:
+        letters = [char for char in text if char.isalpha()]
+        if not letters:
+            return False
+        cyrillic = sum(1 for char in letters if "\u0400" <= char <= "\u04ff")
+        return cyrillic / len(letters) >= 0.3
+
     def _contradiction_prompt(self, left: str, right: str) -> str:
         return f"""
 Compare two knowledge graph statements and decide whether they contradict each other.
+Write the title and reason in the same language as the statements. If the statements use different languages, use the language of Statement A.
 
 Statement A:
 {left}
@@ -346,6 +370,7 @@ Return JSON with this exact structure:
 {{
   "is_contradiction": true,
   "confidence": 0.0,
+  "title": "short title",
   "reason": "short explanation"
 }}
 

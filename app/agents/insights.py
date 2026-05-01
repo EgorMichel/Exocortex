@@ -102,7 +102,30 @@ class Digest:
                 f"(score={insight.score:.3f})"
             )
             lines.append(f"   {insight.description}")
+            statement_a = insight.metadata.get("statement_a")
+            statement_b = insight.metadata.get("statement_b")
+            if insight.insight_type == InsightType.CONTRADICTION and statement_a and statement_b:
+                label_a, label_b = self._statement_labels(statement_a, statement_b)
+                lines.append(f"   {label_a}: {self._compact(statement_a)}")
+                lines.append(f"   {label_b}: {self._compact(statement_b)}")
         return "\n".join(lines)
+
+    def _statement_labels(self, statement_a: Any, statement_b: Any) -> tuple[str, str]:
+        text = f"{statement_a} {statement_b}"
+        if self._looks_cyrillic(text):
+            return "Утверждение A", "Утверждение B"
+        return "Statement A", "Statement B"
+
+    def _looks_cyrillic(self, text: str) -> bool:
+        letters = [char for char in text if char.isalpha()]
+        if not letters:
+            return False
+        cyrillic = sum(1 for char in letters if "\u0400" <= char <= "\u04ff")
+        return cyrillic / len(letters) >= 0.3
+
+    def _compact(self, value: Any, limit: int = 240) -> str:
+        text = " ".join(str(value).split())
+        return text if len(text) <= limit else f"{text[: limit - 3]}..."
 
 
 class InsightStore:

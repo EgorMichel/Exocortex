@@ -99,6 +99,8 @@ def test_contradiction_detection_uses_llm_service(tmp_path):
     assert len(insights) == 1
     assert insights[0].insight_type == InsightType.CONTRADICTION
     assert insights[0].score == 0.91
+    assert insights[0].metadata["statement_a"] == first.content
+    assert insights[0].metadata["statement_b"] == second.content
 
 
 def test_digest_prioritizes_contradictions_before_other_insights(tmp_path):
@@ -129,6 +131,28 @@ def test_digest_prioritizes_contradictions_before_other_insights(tmp_path):
         InsightType.CONTRADICTION,
         InsightType.REMINDER,
     ]
+
+
+def test_digest_renders_contradiction_statements():
+    digest = Digest(
+        insights=[
+            Insight(
+                insight_type=InsightType.CONTRADICTION,
+                title="Потенциальное противоречие",
+                description="Одно утверждение говорит об улучшении сна, другое - об ухудшении.",
+                score=0.9,
+                metadata={
+                    "statement_a": "Кофе улучшает качество сна.",
+                    "statement_b": "Кофе ухудшает качество сна.",
+                },
+            )
+        ]
+    )
+
+    output = digest.format_text()
+
+    assert "Утверждение A: Кофе улучшает качество сна." in output
+    assert "Утверждение B: Кофе ухудшает качество сна." in output
 
 
 def test_insight_store_round_trips_digest(tmp_path):

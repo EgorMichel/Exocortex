@@ -11,3 +11,7 @@ tmp.py
 
 # Runtime data
 data/
+
+# Local text materials for manual testing
+test_data/
+Test_materials/
