@@ -28,6 +28,37 @@ class AppSettings:
     llm_api_key: Optional[str] = None
     llm_model: str = "gpt-4o-mini"
     llm_api_base: Optional[str] = None
+    agent_enabled: bool = False
+    agent_interval_minutes: int = 1440
+    agent_digest_limit: int = 3
+    agent_forgotten_threshold: float = 0.3
+
+
+def _getenv_bool(name: str, default: bool = False) -> bool:
+    value = os.getenv(name)
+    if value is None:
+        return default
+    return value.strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _getenv_int(name: str, default: int) -> int:
+    value = os.getenv(name)
+    if not value:
+        return default
+    try:
+        return int(value)
+    except ValueError:
+        return default
+
+
+def _getenv_float(name: str, default: float) -> float:
+    value = os.getenv(name)
+    if not value:
+        return default
+    try:
+        return float(value)
+    except ValueError:
+        return default
 
 
 def load_settings(env_path: str | Path = DEFAULT_ENV_PATH) -> AppSettings:
@@ -53,4 +84,8 @@ def load_settings(env_path: str | Path = DEFAULT_ENV_PATH) -> AppSettings:
         llm_api_key=_getenv_optional("LLM_API_KEY") or _getenv_optional("OPENAI_API_KEY"),
         llm_model=llm_model or default_model,
         llm_api_base=llm_api_base,
+        agent_enabled=_getenv_bool("AGENT_ENABLED", False),
+        agent_interval_minutes=_getenv_int("AGENT_INTERVAL_MINUTES", 1440),
+        agent_digest_limit=_getenv_int("AGENT_DIGEST_LIMIT", 3),
+        agent_forgotten_threshold=_getenv_float("AGENT_FORGOTTEN_THRESHOLD", 0.3),
     )

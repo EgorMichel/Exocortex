@@ -1,9 +1,10 @@
 from fastapi.testclient import TestClient
+from datetime import timedelta
 
 from app import cli
 from app.api import routes
 from app.config import load_settings
-from app.core.models import Node
+from app.core.models import Node, utc_now
 from app.core.repository import GraphRepository
 
 
@@ -83,6 +84,49 @@ def test_api_add_knowledge_uses_configured_storage(monkeypatch, tmp_path):
     assert storage_path.with_suffix(".gexf").exists()
 
 
+def test_api_agent_analyze_generates_digest(monkeypatch, tmp_path):
+    _disable_llm(monkeypatch)
+    storage_path = tmp_path / "api_agent_graph"
+    monkeypatch.setenv("STORAGE_PATH", str(storage_path))
+    routes._repository = None
+    routes._llm_service = None
+    routes._agent = None
+
+    repo = GraphRepository(storage_path=str(storage_path))
+    node = Node(content="Old knowledge should be refreshed.", decay_rate=0.2)
+    node.last_interacted = utc_now() - timedelta(days=30)
+    repo.add_node(node)
+    repo.save()
+
+    client = TestClient(routes.app)
+    response = client.post("/api/agent/analyze")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["insights"][0]["insight_type"] == "reminder"
+    assert storage_path.with_suffix(".insights.json").exists()
+
+
+def test_api_ingest_source_text(monkeypatch, tmp_path):
+    _disable_llm(monkeypatch)
+    storage_path = tmp_path / "api_source_graph"
+    monkeypatch.setenv("STORAGE_PATH", str(storage_path))
+    routes._repository = None
+    routes._llm_service = None
+    routes._agent = None
+
+    client = TestClient(routes.app)
+    response = client.post(
+        "/api/sources",
+        json={"text": "External source content.", "source_type": "note"},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["nodes_created"] == 0
+    repo = GraphRepository(storage_path=str(storage_path))
+    assert repo.get_all_fragments()[0].source_type == "note"
+
+
 def test_cli_add_stats_search_and_clear(monkeypatch, tmp_path, capsys):
     _disable_llm(monkeypatch)
     storage_path = tmp_path / "cli_graph"
@@ -103,3 +147,40 @@ def test_cli_add_stats_search_and_clear(monkeypatch, tmp_path, capsys):
     assert cli.main(["clear"]) == 0
     assert not storage_path.with_suffix(".gexf").exists()
     assert not storage_path.with_suffix(".fragments.json").exists()
+
+
+def test_cli_analyze_and_digest(monkeypatch, tmp_path, capsys):
+    _disable_llm(monkeypatch)
+    storage_path = tmp_path / "cli_agent_graph"
+    monkeypatch.setenv("STORAGE_PATH", str(storage_path))
+
+    repo = GraphRepository(storage_path=str(storage_path))
+    node = Node(content="This old concept should return in a digest.", decay_rate=0.2)
+    node.last_interacted = utc_now() - timedelta(days=30)
+    repo.add_node(node)
+    repo.save()
+
+    assert cli.main(["analyze"]) == 0
+    analyze_output = capsys.readouterr().out
+    assert "reminder" in analyze_output
+
+    assert cli.main(["digest"]) == 0
+    digest_output = capsys.readouterr().out
+    assert "Digest" in digest_output
+
+
+def test_cli_ingest_file(monkeypatch, tmp_path, capsys):
+    _disable_llm(monkeypatch)
+    storage_path = tmp_path / "cli_source_graph"
+    source_file = tmp_path / "source.txt"
+    source_file.write_text("External file knowledge.", encoding="utf-8")
+    monkeypatch.setenv("STORAGE_PATH", str(storage_path))
+
+    assert cli.main(["ingest", "--file", str(source_file)]) == 0
+    output = capsys.readouterr().out
+    assert "Ingested sources: 1" in output
+
+    repo = GraphRepository(storage_path=str(storage_path))
+    fragments = repo.get_all_fragments()
+    assert len(fragments) == 1
+    assert fragments[0].source_type == "file"

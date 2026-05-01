@@ -12,9 +12,13 @@ from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel, Field
 from typing import Optional, List, Dict, Any
 
+from app.agents.insights import Digest, Insight
+from app.agents.proactive import AgentSettings, ProactiveAgent
+from app.agents.scheduler import build_agent_scheduler
 from app.config import load_settings
 from app.core.repository import GraphRepository
 from app.llm.extraction import extract_and_store, LLMService
+from app.services.external_sources import ExternalSourceIngestor
 
 
 # === Pydantic модели для API ===
@@ -32,6 +36,13 @@ class AddKnowledgeResponse(BaseModel):
     nodes_created: int
     edges_created: int
     summary: str
+
+
+class IngestSourceRequest(BaseModel):
+    """Запрос на импорт внешнего текстового источника."""
+    text: Optional[str] = Field(default=None, description="Текст для импорта")
+    url: Optional[str] = Field(default=None, description="URL текстового источника")
+    source_type: str = Field(default="external", description="Тип источника")
 
 
 class NodeResponse(BaseModel):
@@ -77,16 +88,52 @@ class EdgeListResponse(BaseModel):
     total: int
 
 
+class InsightResponse(BaseModel):
+    """Представление инсайта в API."""
+    id: str
+    insight_type: str
+    title: str
+    description: str
+    node_ids: List[str]
+    edge_ids: List[str]
+    score: float
+    metadata: Dict[str, Any]
+    created_at: str
+
+
+class DigestResponse(BaseModel):
+    """Дайджест проактивного агента."""
+    id: str
+    created_at: str
+    insights: List[InsightResponse]
+
+
 # === Lifecycle ===
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Initialize and persist repository around application lifetime."""
     repository = get_repository()
+    settings = load_settings()
+    scheduler = None
+    if settings.agent_enabled:
+        scheduler = build_agent_scheduler(
+            repository=repository,
+            llm_service=get_llm_service(),
+            interval_minutes=settings.agent_interval_minutes,
+            agent_settings=AgentSettings(
+                digest_limit=settings.agent_digest_limit,
+                forgotten_threshold=settings.agent_forgotten_threshold,
+            ),
+        )
+        scheduler.start()
+        print("Proactive agent scheduler started.")
     print(f"Exocortex started. Graph loaded with {len(repository.get_all_nodes())} nodes.")
     try:
         yield
     finally:
+        if scheduler:
+            scheduler.shutdown(wait=False)
         repository = get_repository()
         if repository.storage_path:
             repository.save()
@@ -105,6 +152,7 @@ app = FastAPI(
 # Глобальный репозиторий (в будущем можно вынести в dependency injection)
 _repository: Optional[GraphRepository] = None
 _llm_service: Optional[LLMService] = None
+_agent: Optional[ProactiveAgent] = None
 
 
 def get_repository() -> GraphRepository:
@@ -128,6 +176,44 @@ def get_llm_service() -> LLMService:
             base_url=settings.llm_api_base,
         )
     return _llm_service
+
+
+def get_agent() -> ProactiveAgent:
+    """Получить или создать проактивного агента."""
+    global _agent
+    if _agent is None:
+        settings = load_settings()
+        _agent = ProactiveAgent(
+            repository=get_repository(),
+            llm_service=get_llm_service(),
+            settings=AgentSettings(
+                digest_limit=settings.agent_digest_limit,
+                forgotten_threshold=settings.agent_forgotten_threshold,
+            ),
+        )
+    return _agent
+
+
+def _insight_response(insight: Insight) -> InsightResponse:
+    return InsightResponse(
+        id=insight.id,
+        insight_type=insight.insight_type.value,
+        title=insight.title,
+        description=insight.description,
+        node_ids=insight.node_ids,
+        edge_ids=insight.edge_ids,
+        score=insight.score,
+        metadata=insight.metadata,
+        created_at=insight.created_at.isoformat(),
+    )
+
+
+def _digest_response(digest: Digest) -> DigestResponse:
+    return DigestResponse(
+        id=digest.id,
+        created_at=digest.created_at.isoformat(),
+        insights=[_insight_response(insight) for insight in digest.insights],
+    )
 
 
 # === Endpoints ===
@@ -173,6 +259,35 @@ async def add_knowledge(request: AddKnowledgeRequest):
         
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error processing knowledge: {str(e)}")
+
+
+@app.post("/api/sources", response_model=AddKnowledgeResponse)
+async def ingest_source(request: IngestSourceRequest):
+    """Импортировать внешний источник: прямой текст или текстовый URL."""
+    if not request.text and not request.url:
+        raise HTTPException(status_code=400, detail="Provide either text or url")
+
+    repository = get_repository()
+    ingestor = ExternalSourceIngestor(repository, llm_service=get_llm_service())
+    try:
+        if request.url:
+            fragment = await ingestor.ingest_url(request.url)
+        else:
+            fragment = await ingestor.ingest_text(
+                text=request.text or "",
+                source_type=request.source_type,
+            )
+        return AddKnowledgeResponse(
+            fragment_id=fragment.id,
+            nodes_created=len(fragment.extracted_nodes),
+            edges_created=len([
+                edge for edge in repository.get_all_edges()
+                if edge.metadata.get("source_fragment") == fragment.id
+            ]),
+            summary=fragment.content[:200] + "..." if len(fragment.content) > 200 else fragment.content,
+        )
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Error ingesting source: {str(exc)}")
 
 
 @app.get("/api/nodes", response_model=NodeListResponse)
@@ -319,6 +434,31 @@ async def get_fragments(limit: int = 50):
         }
         for f in fragments
     ]
+
+
+@app.post("/api/agent/analyze", response_model=DigestResponse)
+async def run_agent_analysis():
+    """Запустить проактивный анализ графа и сохранить дайджест."""
+    digest = await get_agent().analyze(save=True)
+    return _digest_response(digest)
+
+
+@app.get("/api/digest", response_model=DigestResponse)
+async def get_latest_digest():
+    """Получить последний сохранённый дайджест."""
+    digest = get_agent().get_latest_digest()
+    if digest is None:
+        raise HTTPException(status_code=404, detail="Digest not found")
+    return _digest_response(digest)
+
+
+@app.get("/api/insights", response_model=List[InsightResponse])
+async def get_latest_insights():
+    """Получить инсайты из последнего сохранённого дайджеста."""
+    digest = get_agent().get_latest_digest()
+    if digest is None:
+        return []
+    return [_insight_response(insight) for insight in digest.insights]
 
 
 @app.delete("/api/nodes/{node_id}")

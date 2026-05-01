@@ -8,10 +8,12 @@ import sys
 from pathlib import Path
 from typing import Iterable, Optional
 
+from app.agents.proactive import AgentSettings, ProactiveAgent
 from app.config import load_settings
 from app.core.models import Node
 from app.core.repository import GraphRepository
 from app.llm.extraction import LLMService, extract_and_store
+from app.services.external_sources import ExternalSourceIngestor
 
 
 def _build_repository() -> GraphRepository:
@@ -26,6 +28,18 @@ def _build_llm_service() -> LLMService:
         api_key=settings.llm_api_key,
         model=settings.llm_model,
         base_url=settings.llm_api_base,
+    )
+
+
+def _build_agent(repo: Optional[GraphRepository] = None) -> ProactiveAgent:
+    settings = load_settings()
+    return ProactiveAgent(
+        repository=repo or GraphRepository(storage_path=settings.storage_path),
+        llm_service=_build_llm_service(),
+        settings=AgentSettings(
+            digest_limit=settings.agent_digest_limit,
+            forgotten_threshold=settings.agent_forgotten_threshold,
+        ),
     )
 
 
@@ -123,11 +137,51 @@ def _cmd_clear(args: argparse.Namespace) -> int:
     for path in (
         storage_path.with_suffix(".gexf"),
         storage_path.with_suffix(".fragments.json"),
+        storage_path.with_suffix(".insights.json"),
     ):
         if path.exists():
             path.unlink()
             deleted += 1
     print(f"Cleared storage files: {deleted}")
+    return 0
+
+
+def _cmd_analyze(args: argparse.Namespace) -> int:
+    repo = _build_repository()
+    agent = _build_agent(repo)
+    digest = agent.analyze_sync(save=not args.no_save)
+    print(digest.format_text())
+    return 0
+
+
+def _cmd_digest(args: argparse.Namespace) -> int:
+    agent = _build_agent()
+    digest = agent.get_latest_digest()
+    if digest is None:
+        print("No saved digest found.")
+        return 0
+    print(digest.format_text())
+    return 0
+
+
+async def _cmd_ingest(args: argparse.Namespace) -> int:
+    repo = _build_repository()
+    ingestor = ExternalSourceIngestor(repo, llm_service=_build_llm_service())
+    fragments = []
+
+    for file_path in args.file or []:
+        fragments.append(await ingestor.ingest_file(file_path))
+    for url in args.url or []:
+        fragments.append(await ingestor.ingest_url(url))
+    if args.text:
+        fragments.append(await ingestor.ingest_text(" ".join(args.text)))
+
+    if not fragments:
+        raise ValueError("No sources provided. Pass --file, --url, or text arguments.")
+
+    print(f"Ingested sources: {len(fragments)}")
+    print(f"Fragments: {', '.join(fragment.id for fragment in fragments)}")
+    print(f"Total nodes: {repo.get_stats()['total_nodes']}")
     return 0
 
 
@@ -162,6 +216,19 @@ def build_parser() -> argparse.ArgumentParser:
 
     clear_parser = subparsers.add_parser("clear", help="Remove persisted graph files")
     clear_parser.set_defaults(func=_cmd_clear)
+
+    analyze_parser = subparsers.add_parser("analyze", help="Run the proactive agent once")
+    analyze_parser.add_argument("--no-save", action="store_true", help="Do not save generated digest")
+    analyze_parser.set_defaults(func=_cmd_analyze)
+
+    digest_parser = subparsers.add_parser("digest", help="Show the latest proactive digest")
+    digest_parser.set_defaults(func=_cmd_digest)
+
+    ingest_parser = subparsers.add_parser("ingest", help="Ingest external text sources")
+    ingest_parser.add_argument("text", nargs="*", help="Direct text to ingest")
+    ingest_parser.add_argument("--file", action="append", help="Read an external UTF-8 file")
+    ingest_parser.add_argument("--url", action="append", help="Fetch and ingest a text URL")
+    ingest_parser.set_defaults(func=_cmd_ingest)
 
     return parser
 
