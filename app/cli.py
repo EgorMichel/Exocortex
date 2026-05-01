@@ -14,6 +14,7 @@ from app.core.models import Node
 from app.core.repository import GraphRepository
 from app.llm.extraction import LLMService, extract_and_store
 from app.services.external_sources import ExternalSourceIngestor
+from app.services.personalization import PersonalizationService
 
 
 def _build_repository() -> GraphRepository:
@@ -41,6 +42,12 @@ def _build_agent(repo: Optional[GraphRepository] = None) -> ProactiveAgent:
             forgotten_threshold=settings.agent_forgotten_threshold,
         ),
     )
+
+
+def _build_personalization_service(repo: Optional[GraphRepository] = None) -> PersonalizationService:
+    repository = repo or _build_repository()
+    agent = _build_agent(repository)
+    return PersonalizationService(repository=repository, insight_store=agent.insight_store)
 
 
 def _read_input(args: argparse.Namespace) -> str:
@@ -138,6 +145,7 @@ def _cmd_clear(args: argparse.Namespace) -> int:
         storage_path.with_suffix(".gexf"),
         storage_path.with_suffix(".fragments.json"),
         storage_path.with_suffix(".insights.json"),
+        storage_path.with_suffix(".feedback.json"),
     ):
         if path.exists():
             path.unlink()
@@ -161,6 +169,51 @@ def _cmd_digest(args: argparse.Namespace) -> int:
         print("No saved digest found.")
         return 0
     print(digest.format_text())
+    return 0
+
+
+def _cmd_inbox(args: argparse.Namespace) -> int:
+    service = _build_personalization_service()
+    items = service.list_inbox(include_reacted=args.include_reacted, limit=args.limit)
+    if not items:
+        print("Inbox is empty.")
+        return 0
+
+    for item in items:
+        insight = item.insight
+        status = item.feedback.action.value if item.feedback else "pending"
+        print(f"{insight.id} [{insight.insight_type.value}] status={status} score={insight.score:.3f}")
+        print(f"  {insight.title}")
+        print(f"  {insight.description}")
+    return 0
+
+
+def _cmd_react(args: argparse.Namespace) -> int:
+    service = _build_personalization_service()
+    feedback = service.react_to_insight(
+        insight_id=args.insight_id,
+        action=args.action,
+        note=args.note,
+    )
+    print(f"Recorded feedback: {feedback.action.value}")
+    print(f"Insight: {feedback.insight_id}")
+    if feedback.effects:
+        print("Effects:")
+        for effect in feedback.effects:
+            print(f"  {effect}")
+    return 0
+
+
+def _cmd_interests(args: argparse.Namespace) -> int:
+    profile = _build_personalization_service().build_interest_profile()
+    print(f"Feedback: {profile['total_feedback']}")
+    print(f"Positive: {profile['positive_feedback']}")
+    print(f"Negative: {profile['negative_feedback']}")
+    print(f"Message style: {profile['message_style']}")
+    if profile["top_topics"]:
+        print("Top topics:")
+        for item in profile["top_topics"]:
+            print(f"  {item['topic']}: {item['score']}")
     return 0
 
 
@@ -223,6 +276,27 @@ def build_parser() -> argparse.ArgumentParser:
 
     digest_parser = subparsers.add_parser("digest", help="Show the latest proactive digest")
     digest_parser.set_defaults(func=_cmd_digest)
+
+    inbox_parser = subparsers.add_parser("inbox", help="List saved insights with feedback status")
+    inbox_parser.add_argument("--limit", type=int, default=50)
+    inbox_parser.add_argument(
+        "--include-reacted",
+        action="store_true",
+        help="Include insights that already have feedback",
+    )
+    inbox_parser.set_defaults(func=_cmd_inbox)
+
+    react_parser = subparsers.add_parser("react", help="React to a saved insight")
+    react_parser.add_argument("insight_id")
+    react_parser.add_argument(
+        "action",
+        help="Reaction action, e.g. confirm, reject, useful, ignore, choose_left",
+    )
+    react_parser.add_argument("--note", default=None, help="Optional note or refinement")
+    react_parser.set_defaults(func=_cmd_react)
+
+    interests_parser = subparsers.add_parser("interests", help="Show personalization profile")
+    interests_parser.set_defaults(func=_cmd_interests)
 
     ingest_parser = subparsers.add_parser("ingest", help="Ingest external text sources")
     ingest_parser.add_argument("text", nargs="*", help="Direct text to ingest")

@@ -5,6 +5,12 @@ from app.agents.insights import Digest, Insight, InsightStore, InsightType
 from app.agents.proactive import AgentSettings, ProactiveAgent
 from app.core.models import Edge, EdgeType, Node, NodeType, utc_now
 from app.core.repository import GraphRepository
+from app.services.personalization import (
+    FeedbackAction,
+    FeedbackStore,
+    InsightFeedback,
+    PersonalizationService,
+)
 
 
 def test_forgotten_content_generates_reminder(tmp_path):
@@ -175,3 +181,79 @@ def test_insight_store_round_trips_digest(tmp_path):
     assert latest is not None
     assert latest.id == digest.id
     assert latest.insights[0].node_ids == ["a", "b"]
+
+
+def test_personalization_confirm_connection_updates_graph(tmp_path):
+    repo = GraphRepository(storage_path=str(tmp_path / "graph"))
+    first = Node(content="Python helps automate data workflows.", metadata={"topic": "python data"})
+    second = Node(content="Automation improves data processing.", metadata={"topic": "python data"})
+    repo.add_node(first)
+    repo.add_node(second)
+
+    insight = Insight(
+        insight_type=InsightType.HIDDEN_CONNECTION,
+        title="Possible hidden connection",
+        description="These nodes look related.",
+        node_ids=[first.id, second.id],
+        score=0.8,
+    )
+    insight_store = InsightStore(repo.storage_path)
+    insight_store.save_digest(Digest(insights=[insight]))
+    service = PersonalizationService(repo, insight_store=insight_store)
+
+    feedback = service.react_to_insight(insight.id, FeedbackAction.CONFIRM)
+
+    edges = repo.get_edges_between(first.id, second.id)
+    assert feedback.action == FeedbackAction.CONFIRM
+    assert edges
+    assert edges[0].edge_type == EdgeType.RELATED_TO
+    assert edges[0].metadata["source"] == "user_feedback"
+
+
+def test_personalization_reminder_useful_refreshes_node_and_profile(tmp_path):
+    repo = GraphRepository(storage_path=str(tmp_path / "graph"))
+    node = Node(
+        content="Spaced repetition keeps memory fresh.",
+        metadata={"topic": "learning memory"},
+        decay_rate=0.2,
+    )
+    node.last_interacted = utc_now() - timedelta(days=30)
+    repo.add_node(node)
+    before_strength = repo.get_node(node.id).calculate_current_strength()
+
+    insight = Insight(
+        insight_type=InsightType.REMINDER,
+        title="Refresh fading knowledge",
+        description=node.content,
+        node_ids=[node.id],
+        score=0.7,
+    )
+    insight_store = InsightStore(repo.storage_path)
+    insight_store.save_digest(Digest(insights=[insight]))
+    service = PersonalizationService(repo, insight_store=insight_store)
+
+    feedback = service.react_to_insight(insight.id, "useful")
+    refreshed = repo.get_node(node.id)
+    profile = service.build_interest_profile()
+
+    assert feedback.effects == [f"refreshed_node:{node.id}"]
+    assert refreshed.calculate_current_strength() > before_strength
+    assert profile["positive_feedback"] == 1
+    assert profile["top_topics"][0]["topic"] == "learning"
+
+
+def test_feedback_store_round_trips_feedback(tmp_path):
+    store = FeedbackStore(tmp_path / "graph")
+    feedback = InsightFeedback(
+        insight_id="insight-1",
+        insight_type=InsightType.REMINDER,
+        action=FeedbackAction.USEFUL,
+        node_ids=["node-1"],
+    )
+
+    store.save_feedback(feedback)
+    loaded = store.load_feedback()
+    latest = store.latest_by_insight()
+
+    assert loaded[0].id == feedback.id
+    assert latest["insight-1"].action == FeedbackAction.USEFUL

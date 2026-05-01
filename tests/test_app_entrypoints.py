@@ -2,6 +2,7 @@ from fastapi.testclient import TestClient
 from datetime import timedelta
 
 from app import cli
+from app.agents.insights import Digest, Insight, InsightStore, InsightType
 from app.api import routes
 from app.config import load_settings
 from app.core.models import Node, utc_now
@@ -91,6 +92,7 @@ def test_api_agent_analyze_generates_digest(monkeypatch, tmp_path):
     routes._repository = None
     routes._llm_service = None
     routes._agent = None
+    routes._personalization_service = None
 
     repo = GraphRepository(storage_path=str(storage_path))
     node = Node(content="Old knowledge should be refreshed.", decay_rate=0.2)
@@ -114,6 +116,7 @@ def test_api_ingest_source_text(monkeypatch, tmp_path):
     routes._repository = None
     routes._llm_service = None
     routes._agent = None
+    routes._personalization_service = None
 
     client = TestClient(routes.app)
     response = client.post(
@@ -184,3 +187,76 @@ def test_cli_ingest_file(monkeypatch, tmp_path, capsys):
     fragments = repo.get_all_fragments()
     assert len(fragments) == 1
     assert fragments[0].source_type == "file"
+
+
+def test_api_inbox_feedback_and_personalization(monkeypatch, tmp_path):
+    _disable_llm(monkeypatch)
+    storage_path = tmp_path / "api_feedback_graph"
+    monkeypatch.setenv("STORAGE_PATH", str(storage_path))
+    routes._repository = None
+    routes._llm_service = None
+    routes._agent = None
+    routes._personalization_service = None
+
+    repo = GraphRepository(storage_path=str(storage_path))
+    node = Node(content="Review old API knowledge.", metadata={"topic": "api knowledge"}, decay_rate=0.2)
+    node.last_interacted = utc_now() - timedelta(days=30)
+    repo.add_node(node)
+    repo.save()
+    insight = Insight(
+        insight_type=InsightType.REMINDER,
+        title="Refresh fading knowledge",
+        description=node.content,
+        node_ids=[node.id],
+        score=0.7,
+    )
+    InsightStore(storage_path).save_digest(Digest(insights=[insight]))
+
+    client = TestClient(routes.app)
+    inbox_response = client.get("/api/inbox")
+    assert inbox_response.status_code == 200
+    assert inbox_response.json()[0]["insight"]["id"] == insight.id
+    assert inbox_response.json()[0]["feedback"] is None
+
+    feedback_response = client.post(
+        f"/api/insights/{insight.id}/feedback",
+        json={"action": "useful"},
+    )
+    assert feedback_response.status_code == 200
+    assert feedback_response.json()["action"] == "useful"
+
+    profile_response = client.get("/api/personalization")
+    assert profile_response.status_code == 200
+    assert profile_response.json()["positive_feedback"] == 1
+
+
+def test_cli_inbox_react_and_interests(monkeypatch, tmp_path, capsys):
+    _disable_llm(monkeypatch)
+    storage_path = tmp_path / "cli_feedback_graph"
+    monkeypatch.setenv("STORAGE_PATH", str(storage_path))
+
+    repo = GraphRepository(storage_path=str(storage_path))
+    node = Node(content="CLI feedback should tune personalization.", metadata={"topic": "cli feedback"})
+    repo.add_node(node)
+    repo.save()
+    insight = Insight(
+        insight_type=InsightType.REMINDER,
+        title="Refresh CLI feedback",
+        description=node.content,
+        node_ids=[node.id],
+        score=0.5,
+    )
+    InsightStore(storage_path).save_digest(Digest(insights=[insight]))
+
+    assert cli.main(["inbox"]) == 0
+    inbox_output = capsys.readouterr().out
+    assert insight.id in inbox_output
+    assert "status=pending" in inbox_output
+
+    assert cli.main(["react", insight.id, "useful"]) == 0
+    react_output = capsys.readouterr().out
+    assert "Recorded feedback: useful" in react_output
+
+    assert cli.main(["interests"]) == 0
+    interests_output = capsys.readouterr().out
+    assert "Positive: 1" in interests_output

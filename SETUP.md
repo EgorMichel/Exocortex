@@ -2,7 +2,7 @@
 
 ## Что такое Exocortex?
 
-Exocortex - персональная система управления знаниями на основе графа знаний и LLM. MVP умеет хранить узлы и связи, извлекать сущности из текста через настроенный LLM, анализировать граф проактивным агентом, формировать дайджесты инсайтов, импортировать внешние текстовые источники и работать через CLI/FastAPI.
+Exocortex - персональная система управления знаниями на основе графа знаний и LLM. MVP умеет хранить узлы и связи, извлекать сущности из текста через настроенный LLM, анализировать граф проактивным агентом, формировать дайджесты инсайтов, принимать реакции пользователя, обновлять граф по feedback, строить базовый профиль интересов, импортировать внешние текстовые источники и работать через CLI/FastAPI.
 
 ## Требования
 
@@ -119,6 +119,9 @@ python -m app.cli search Python
 python -m app.cli forgotten --threshold 0.3
 python -m app.cli analyze
 python -m app.cli digest
+python -m app.cli inbox
+python -m app.cli react <insight_id> useful
+python -m app.cli interests
 python -m app.cli ingest --file notes.txt
 python -m app.cli ingest --url https://example.com/article.txt
 python -m app.cli clear
@@ -139,6 +142,7 @@ docker-compose up -d
 - `data/graph.gexf` - граф знаний в формате GEXF
 - `data/graph.fragments.json` - исходные фрагменты знаний
 - `data/graph.insights.json` - сохранённые дайджесты проактивного агента
+- `data/graph.feedback.json` - реакции пользователя на инсайты
 
 Директория создаётся автоматически при первом сохранении.
 
@@ -158,6 +162,9 @@ docker-compose up -d
 - `POST /api/agent/analyze` - запустить проактивный анализ графа
 - `GET /api/digest` - получить последний сохранённый дайджест
 - `GET /api/insights` - получить инсайты из последнего дайджеста
+- `GET /api/inbox` - получить inbox инсайтов со статусом реакции
+- `POST /api/insights/{insight_id}/feedback` - сохранить реакцию на инсайт и обновить граф
+- `GET /api/personalization` - получить базовый профиль интересов
 - `DELETE /api/nodes/{node_id}` - удалить узел
 - `DELETE /api/edges/{edge_id}` - удалить связь
 
@@ -174,6 +181,16 @@ curl -X POST http://127.0.0.1:8000/api/knowledge ^
 ```bash
 curl -X POST http://127.0.0.1:8000/api/agent/analyze
 curl http://127.0.0.1:8000/api/digest
+```
+
+Реакция на инсайт:
+
+```bash
+curl http://127.0.0.1:8000/api/inbox
+curl -X POST http://127.0.0.1:8000/api/insights/<insight_id>/feedback ^
+  -H "Content-Type: application/json" ^
+  -d "{\"action\":\"useful\"}"
+curl http://127.0.0.1:8000/api/personalization
 ```
 
 ## Python API
@@ -209,6 +226,25 @@ python -m app.cli digest
 
 Фоновый запуск вместе с API включается через `AGENT_ENABLED=true`. По умолчанию агент не стартует автоматически, чтобы локальная разработка и тесты не создавали лишние фоновые задачи.
 
+## Контур взаимодействия и персонализация
+
+После генерации дайджеста инсайты попадают во встроенный inbox. Пользователь может реагировать на них через CLI или API:
+
+- для `contradiction`: `choose_left`, `choose_right`, `resolved`, `keep_both`
+- для `hidden_connection`: `confirm`, `reject`, `refine`
+- для `reminder`: `useful`, `ignore`
+
+CLI-пример:
+
+```bash
+python -m app.cli analyze
+python -m app.cli inbox
+python -m app.cli react <insight_id> useful
+python -m app.cli interests
+```
+
+Реакции сохраняются в `.feedback.json`. Подтверждённые связи добавляются в граф, полезные напоминания усиливают соответствующие узлы, а отклонения и игнорирования учитываются в статистике. Профиль интересов показывает количество feedback-событий, популярные темы, взаимодействия с узлами и базовый стиль сообщений агента.
+
 ## Внешние источники
 
 Для импорта текстовых источников используйте CLI:
@@ -242,11 +278,11 @@ venv\Scripts\python -m pytest -q     # Windows
 python -m pytest -q                  # Linux/macOS после активации venv
 ```
 
-Текущий набор проверяет модели, репозиторий, LLM-извлечение, API-конфигурацию, CLI, проактивного агента, импорт источников и сохранение дайджестов.
+Текущий набор проверяет модели, репозиторий, LLM-извлечение, API-конфигурацию, CLI, проактивного агента, импорт источников, сохранение дайджестов, feedback-контур и персонализацию.
 
 ## Статус MVP
 
-Реализованы Этап 1, Этап 2 и Этап 3:
+Реализованы Этап 1, Этап 2 и Этап 3. Этап 4 частично реализован на уровне backend/CLI:
 
 - базовая структура проекта
 - модели данных `Node`, `Edge`, `KnowledgeFragment`
@@ -254,14 +290,16 @@ python -m pytest -q                  # Linux/macOS после активации
 - сохранение и загрузка GEXF + JSON-фрагментов
 - LLM extraction pipeline без алгоритмического fallback-извлечения
 - REST API
-- CLI: `add`, `stats`, `list`, `search`, `forgotten`, `analyze`, `digest`, `ingest`, `clear`
+- CLI: `add`, `stats`, `list`, `search`, `forgotten`, `analyze`, `digest`, `inbox`, `react`, `interests`, `ingest`, `clear`
 - проактивный агент с поиском противоречий, неочевидных связей и забываемого контента
 - генерация и сохранение дайджестов инсайтов
+- inbox инсайтов, реакции пользователя и обновление графа по feedback
+- базовая модель интересов и статистика взаимодействий
 - фоновый запуск агента через APScheduler
 - локальные векторные эмбеддинги для семантического сравнения узлов
 - импорт внешних текстовых источников через CLI/API
 - запуск через `python -m app.main`
 - Docker Compose
-- 62 автоматических теста
+- 68 автоматических тестов
 
-Следующий этап: контур взаимодействия и персонализация.
+Следующий шаг этапа 4: минимальный web UI для inbox и реакций, затем более глубокая адаптация приоритизации агента на основе профиля интересов.

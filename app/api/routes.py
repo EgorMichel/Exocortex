@@ -19,6 +19,7 @@ from app.config import load_settings
 from app.core.repository import GraphRepository
 from app.llm.extraction import extract_and_store, LLMService
 from app.services.external_sources import ExternalSourceIngestor
+from app.services.personalization import InboxItem, InsightFeedback, PersonalizationService
 
 
 # === Pydantic модели для API ===
@@ -108,6 +109,42 @@ class DigestResponse(BaseModel):
     insights: List[InsightResponse]
 
 
+class InsightFeedbackRequest(BaseModel):
+    """Реакция пользователя на инсайт."""
+    action: str = Field(..., description="Действие: confirm, reject, useful, ignore, etc.")
+    note: Optional[str] = Field(default=None, description="Необязательное уточнение")
+
+
+class InsightFeedbackResponse(BaseModel):
+    """Сохранённая реакция пользователя."""
+    id: str
+    insight_id: str
+    insight_type: str
+    action: str
+    node_ids: List[str]
+    edge_ids: List[str]
+    note: Optional[str]
+    effects: List[str]
+    created_at: str
+
+
+class InboxItemResponse(BaseModel):
+    """Элемент inbox: инсайт и последняя реакция, если она есть."""
+    insight: InsightResponse
+    feedback: Optional[InsightFeedbackResponse] = None
+
+
+class InterestProfileResponse(BaseModel):
+    """Базовая модель интересов пользователя."""
+    total_feedback: int
+    positive_feedback: int
+    negative_feedback: int
+    action_counts: Dict[str, int]
+    top_topics: List[Dict[str, Any]]
+    node_interactions: Dict[str, int]
+    message_style: str
+
+
 # === Lifecycle ===
 
 @asynccontextmanager
@@ -153,6 +190,7 @@ app = FastAPI(
 _repository: Optional[GraphRepository] = None
 _llm_service: Optional[LLMService] = None
 _agent: Optional[ProactiveAgent] = None
+_personalization_service: Optional[PersonalizationService] = None
 
 
 def get_repository() -> GraphRepository:
@@ -194,6 +232,17 @@ def get_agent() -> ProactiveAgent:
     return _agent
 
 
+def get_personalization_service() -> PersonalizationService:
+    """Получить или создать сервис персонализации."""
+    global _personalization_service
+    if _personalization_service is None:
+        _personalization_service = PersonalizationService(
+            repository=get_repository(),
+            insight_store=get_agent().insight_store,
+        )
+    return _personalization_service
+
+
 def _insight_response(insight: Insight) -> InsightResponse:
     return InsightResponse(
         id=insight.id,
@@ -213,6 +262,27 @@ def _digest_response(digest: Digest) -> DigestResponse:
         id=digest.id,
         created_at=digest.created_at.isoformat(),
         insights=[_insight_response(insight) for insight in digest.insights],
+    )
+
+
+def _feedback_response(feedback: InsightFeedback) -> InsightFeedbackResponse:
+    return InsightFeedbackResponse(
+        id=feedback.id,
+        insight_id=feedback.insight_id,
+        insight_type=feedback.insight_type.value,
+        action=feedback.action.value,
+        node_ids=feedback.node_ids,
+        edge_ids=feedback.edge_ids,
+        note=feedback.note,
+        effects=feedback.effects,
+        created_at=feedback.created_at.isoformat(),
+    )
+
+
+def _inbox_item_response(item: InboxItem) -> InboxItemResponse:
+    return InboxItemResponse(
+        insight=_insight_response(item.insight),
+        feedback=_feedback_response(item.feedback) if item.feedback else None,
     )
 
 
@@ -459,6 +529,38 @@ async def get_latest_insights():
     if digest is None:
         return []
     return [_insight_response(insight) for insight in digest.insights]
+
+
+@app.get("/api/inbox", response_model=List[InboxItemResponse])
+async def get_inbox(include_reacted: bool = True, limit: int = 50):
+    """Получить inbox инсайтов со статусом пользовательской реакции."""
+    items = get_personalization_service().list_inbox(
+        include_reacted=include_reacted,
+        limit=limit,
+    )
+    return [_inbox_item_response(item) for item in items]
+
+
+@app.post("/api/insights/{insight_id}/feedback", response_model=InsightFeedbackResponse)
+async def react_to_insight(insight_id: str, request: InsightFeedbackRequest):
+    """Сохранить реакцию пользователя на инсайт и обновить граф."""
+    try:
+        feedback = get_personalization_service().react_to_insight(
+            insight_id=insight_id,
+            action=request.action,
+            note=request.note,
+        )
+    except ValueError as exc:
+        message = str(exc)
+        status_code = 404 if message.startswith("Insight not found") else 400
+        raise HTTPException(status_code=status_code, detail=message)
+    return _feedback_response(feedback)
+
+
+@app.get("/api/personalization", response_model=InterestProfileResponse)
+async def get_personalization_profile():
+    """Получить базовую статистику взаимодействий и интересов."""
+    return InterestProfileResponse(**get_personalization_service().build_interest_profile())
 
 
 @app.delete("/api/nodes/{node_id}")
