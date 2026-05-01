@@ -66,6 +66,25 @@ def test_repository_save_creates_storage_directory(tmp_path):
     assert storage_path.with_suffix(".fragments.json").exists()
 
 
+def test_web_app_is_served(monkeypatch, tmp_path):
+    _disable_llm(monkeypatch)
+    monkeypatch.setenv("STORAGE_PATH", str(tmp_path / "web_graph"))
+    routes._repository = None
+    routes._llm_service = None
+    routes._agent = None
+    routes._personalization_service = None
+
+    client = TestClient(routes.app)
+    root_response = client.get("/")
+    app_response = client.get("/app")
+
+    assert root_response.status_code == 200
+    assert root_response.json()["app"] == "/app"
+    assert app_response.status_code == 200
+    assert "Exocortex Inbox" in app_response.text
+    assert "/api/inbox" in app_response.text
+
+
 def test_api_add_knowledge_uses_configured_storage(monkeypatch, tmp_path):
     _disable_llm(monkeypatch)
     storage_path = tmp_path / "api_graph"

@@ -1,0 +1,591 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Exocortex Inbox</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --bg: #f7f8fa;
+      --panel: #ffffff;
+      --panel-muted: #f0f3f6;
+      --text: #18202a;
+      --muted: #657183;
+      --line: #d9dee5;
+      --accent: #1f6f5b;
+      --accent-strong: #165444;
+      --warn: #9a5b18;
+      --danger: #a33a3a;
+      --shadow: 0 12px 30px rgba(20, 30, 45, 0.08);
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      min-height: 100vh;
+      background: var(--bg);
+      color: var(--text);
+      font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      font-size: 15px;
+      letter-spacing: 0;
+    }
+
+    button,
+    input,
+    select,
+    textarea {
+      font: inherit;
+    }
+
+    button {
+      min-height: 36px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: var(--panel);
+      color: var(--text);
+      cursor: pointer;
+      padding: 0 12px;
+    }
+
+    button:hover {
+      border-color: #aeb8c5;
+      background: #f9fafb;
+    }
+
+    button.primary {
+      background: var(--accent);
+      border-color: var(--accent);
+      color: #ffffff;
+    }
+
+    button.primary:hover {
+      background: var(--accent-strong);
+      border-color: var(--accent-strong);
+    }
+
+    button.danger {
+      color: var(--danger);
+    }
+
+    button:disabled {
+      cursor: not-allowed;
+      opacity: 0.55;
+    }
+
+    .shell {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) 320px;
+      gap: 16px;
+      width: min(1280px, calc(100% - 32px));
+      margin: 0 auto;
+      padding: 20px 0;
+    }
+
+    header {
+      grid-column: 1 / -1;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 16px;
+      min-height: 56px;
+      border-bottom: 1px solid var(--line);
+    }
+
+    h1 {
+      margin: 0;
+      font-size: 24px;
+      line-height: 1.2;
+      font-weight: 700;
+    }
+
+    h2 {
+      margin: 0;
+      font-size: 16px;
+      line-height: 1.25;
+    }
+
+    h3 {
+      margin: 0;
+      font-size: 15px;
+      line-height: 1.35;
+    }
+
+    .toolbar {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      flex-wrap: wrap;
+      justify-content: flex-end;
+    }
+
+    .segmented {
+      display: inline-grid;
+      grid-template-columns: 1fr 1fr;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: var(--panel);
+      overflow: hidden;
+      min-height: 36px;
+    }
+
+    .segmented button {
+      border: 0;
+      border-radius: 0;
+      min-width: 86px;
+      background: transparent;
+    }
+
+    .segmented button.active {
+      background: var(--panel-muted);
+      color: var(--accent-strong);
+      font-weight: 650;
+    }
+
+    .main,
+    aside {
+      min-width: 0;
+    }
+
+    .list {
+      display: grid;
+      gap: 12px;
+    }
+
+    .card,
+    .panel {
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      box-shadow: var(--shadow);
+    }
+
+    .card {
+      display: grid;
+      gap: 12px;
+      padding: 14px;
+    }
+
+    .panel {
+      padding: 14px;
+      display: grid;
+      gap: 14px;
+    }
+
+    .row {
+      display: flex;
+      gap: 10px;
+      align-items: center;
+      justify-content: space-between;
+    }
+
+    .meta {
+      display: flex;
+      gap: 8px;
+      align-items: center;
+      flex-wrap: wrap;
+      color: var(--muted);
+      font-size: 13px;
+    }
+
+    .badge {
+      display: inline-flex;
+      align-items: center;
+      min-height: 24px;
+      padding: 0 8px;
+      border-radius: 999px;
+      background: var(--panel-muted);
+      color: var(--muted);
+      font-size: 12px;
+      font-weight: 650;
+      text-transform: uppercase;
+    }
+
+    .badge.contradiction {
+      background: #faece7;
+      color: #8c4228;
+    }
+
+    .badge.hidden_connection {
+      background: #e9f2f7;
+      color: #2d6077;
+    }
+
+    .badge.reminder {
+      background: #eef4e6;
+      color: #55712b;
+    }
+
+    .status {
+      color: var(--accent-strong);
+      font-weight: 650;
+    }
+
+    .status.pending {
+      color: var(--warn);
+    }
+
+    .description {
+      margin: 0;
+      color: #303a46;
+      line-height: 1.45;
+      overflow-wrap: anywhere;
+    }
+
+    .actions {
+      display: flex;
+      align-items: flex-end;
+      gap: 8px;
+      flex-wrap: wrap;
+    }
+
+    .note {
+      flex: 1 1 220px;
+      min-height: 36px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 8px 10px;
+      resize: vertical;
+      max-height: 120px;
+    }
+
+    .profile-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 8px;
+    }
+
+    .metric {
+      min-height: 64px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 10px;
+      background: #fbfcfd;
+    }
+
+    .metric span {
+      display: block;
+      color: var(--muted);
+      font-size: 12px;
+      margin-bottom: 6px;
+    }
+
+    .metric strong {
+      font-size: 20px;
+      line-height: 1;
+    }
+
+    .topics {
+      display: grid;
+      gap: 8px;
+      margin: 0;
+      padding: 0;
+      list-style: none;
+    }
+
+    .topics li {
+      display: flex;
+      justify-content: space-between;
+      gap: 10px;
+      border-bottom: 1px solid var(--line);
+      padding-bottom: 8px;
+      color: #303a46;
+    }
+
+    .empty,
+    .error {
+      border: 1px dashed var(--line);
+      border-radius: 8px;
+      padding: 18px;
+      color: var(--muted);
+      background: var(--panel);
+    }
+
+    .error {
+      color: var(--danger);
+      border-color: #dca5a5;
+      background: #fff8f8;
+    }
+
+    @media (max-width: 880px) {
+      .shell {
+        grid-template-columns: 1fr;
+        width: min(100% - 20px, 720px);
+        padding-top: 12px;
+      }
+
+      header {
+        align-items: flex-start;
+        flex-direction: column;
+        padding-bottom: 12px;
+      }
+
+      .toolbar {
+        justify-content: flex-start;
+      }
+
+      .profile-grid {
+        grid-template-columns: 1fr 1fr;
+      }
+    }
+
+    @media (max-width: 520px) {
+      .profile-grid,
+      .segmented {
+        grid-template-columns: 1fr;
+      }
+
+      .toolbar,
+      .actions,
+      .row {
+        align-items: stretch;
+        flex-direction: column;
+      }
+
+      button {
+        width: 100%;
+      }
+    }
+  </style>
+</head>
+<body>
+  <div class="shell">
+    <header>
+      <h1>Exocortex Inbox</h1>
+      <div class="toolbar">
+        <div class="segmented" aria-label="Inbox filter">
+          <button id="pendingFilter" class="active" type="button">Pending</button>
+          <button id="allFilter" type="button">All</button>
+        </div>
+        <button id="runAnalysis" class="primary" type="button">Run Analysis</button>
+        <button id="refresh" type="button">Refresh</button>
+      </div>
+    </header>
+
+    <main class="main">
+      <div id="message"></div>
+      <section id="inbox" class="list" aria-live="polite"></section>
+    </main>
+
+    <aside>
+      <section class="panel" aria-live="polite">
+        <div class="row">
+          <h2>Personalization</h2>
+          <span id="style" class="badge">balanced</span>
+        </div>
+        <div class="profile-grid">
+          <div class="metric">
+            <span>Feedback</span>
+            <strong id="totalFeedback">0</strong>
+          </div>
+          <div class="metric">
+            <span>Positive</span>
+            <strong id="positiveFeedback">0</strong>
+          </div>
+          <div class="metric">
+            <span>Negative</span>
+            <strong id="negativeFeedback">0</strong>
+          </div>
+          <div class="metric">
+            <span>Topics</span>
+            <strong id="topicCount">0</strong>
+          </div>
+        </div>
+        <h2>Top Topics</h2>
+        <ul id="topics" class="topics"></ul>
+      </section>
+    </aside>
+  </div>
+
+  <script>
+    const state = {
+      includeReacted: false,
+      loading: false,
+    };
+
+    const actionsByType = {
+      contradiction: [
+        ["choose_left", "Choose A"],
+        ["choose_right", "Choose B"],
+        ["resolved", "Resolved"],
+        ["keep_both", "Keep Both"],
+      ],
+      hidden_connection: [
+        ["confirm", "Confirm"],
+        ["reject", "Reject"],
+        ["refine", "Refine"],
+      ],
+      reminder: [
+        ["useful", "Useful"],
+        ["ignore", "Ignore"],
+      ],
+    };
+
+    const inbox = document.querySelector("#inbox");
+    const message = document.querySelector("#message");
+    const pendingFilter = document.querySelector("#pendingFilter");
+    const allFilter = document.querySelector("#allFilter");
+    const runAnalysis = document.querySelector("#runAnalysis");
+    const refresh = document.querySelector("#refresh");
+
+    function escapeHtml(value) {
+      return String(value ?? "")
+        .replaceAll("&", "&amp;")
+        .replaceAll("<", "&lt;")
+        .replaceAll(">", "&gt;")
+        .replaceAll('"', "&quot;")
+        .replaceAll("'", "&#039;");
+    }
+
+    function compactId(value) {
+      return value ? `${value.slice(0, 8)}...` : "";
+    }
+
+    function setMessage(text, type = "empty") {
+      message.innerHTML = text ? `<div class="${type}">${escapeHtml(text)}</div>` : "";
+    }
+
+    async function requestJson(url, options = {}) {
+      const response = await fetch(url, {
+        headers: { "Content-Type": "application/json" },
+        ...options,
+      });
+      if (!response.ok) {
+        let detail = `${response.status} ${response.statusText}`;
+        try {
+          const payload = await response.json();
+          detail = payload.detail || detail;
+        } catch {
+          // Keep the HTTP fallback detail.
+        }
+        throw new Error(detail);
+      }
+      return response.json();
+    }
+
+    function renderInbox(items) {
+      if (!items.length) {
+        inbox.innerHTML = '<div class="empty">No insights.</div>';
+        return;
+      }
+
+      inbox.innerHTML = items.map((item) => {
+        const insight = item.insight;
+        const feedback = item.feedback;
+        const status = feedback ? feedback.action : "pending";
+        const actions = actionsByType[insight.insight_type] || [];
+        const buttons = actions.map(([action, label]) => (
+          `<button type="button" data-insight="${escapeHtml(insight.id)}" data-action="${action}" ${feedback ? "disabled" : ""}>${label}</button>`
+        )).join("");
+
+        return `
+          <article class="card">
+            <div class="row">
+              <div class="meta">
+                <span class="badge ${escapeHtml(insight.insight_type)}">${escapeHtml(insight.insight_type)}</span>
+                <span>${escapeHtml(compactId(insight.id))}</span>
+                <span>score ${Number(insight.score || 0).toFixed(3)}</span>
+              </div>
+              <span class="status ${feedback ? "" : "pending"}">${escapeHtml(status)}</span>
+            </div>
+            <h3>${escapeHtml(insight.title)}</h3>
+            <p class="description">${escapeHtml(insight.description)}</p>
+            <div class="actions">
+              <textarea class="note" rows="1" data-note="${escapeHtml(insight.id)}" placeholder="Note"></textarea>
+              ${buttons}
+            </div>
+          </article>
+        `;
+      }).join("");
+    }
+
+    function renderProfile(profile) {
+      document.querySelector("#style").textContent = profile.message_style || "balanced";
+      document.querySelector("#totalFeedback").textContent = profile.total_feedback ?? 0;
+      document.querySelector("#positiveFeedback").textContent = profile.positive_feedback ?? 0;
+      document.querySelector("#negativeFeedback").textContent = profile.negative_feedback ?? 0;
+      document.querySelector("#topicCount").textContent = (profile.top_topics || []).length;
+      const topics = document.querySelector("#topics");
+      topics.innerHTML = (profile.top_topics || []).length
+        ? profile.top_topics.map((item) => (
+          `<li><span>${escapeHtml(item.topic)}</span><strong>${escapeHtml(item.score)}</strong></li>`
+        )).join("")
+        : '<li><span>No topics</span><strong>0</strong></li>';
+    }
+
+    async function load() {
+      if (state.loading) {
+        return;
+      }
+      state.loading = true;
+      setMessage("");
+      try {
+        const [items, profile] = await Promise.all([
+          requestJson(`/api/inbox?include_reacted=${state.includeReacted ? "true" : "false"}`),
+          requestJson("/api/personalization"),
+        ]);
+        renderInbox(items);
+        renderProfile(profile);
+      } catch (error) {
+        setMessage(error.message, "error");
+      } finally {
+        state.loading = false;
+      }
+    }
+
+    async function react(insightId, action) {
+      const note = document.querySelector(`[data-note="${CSS.escape(insightId)}"]`)?.value.trim() || null;
+      try {
+        await requestJson(`/api/insights/${encodeURIComponent(insightId)}/feedback`, {
+          method: "POST",
+          body: JSON.stringify({ action, note }),
+        });
+        await load();
+      } catch (error) {
+        setMessage(error.message, "error");
+      }
+    }
+
+    inbox.addEventListener("click", (event) => {
+      const button = event.target.closest("button[data-insight]");
+      if (!button) {
+        return;
+      }
+      react(button.dataset.insight, button.dataset.action);
+    });
+
+    pendingFilter.addEventListener("click", () => {
+      state.includeReacted = false;
+      pendingFilter.classList.add("active");
+      allFilter.classList.remove("active");
+      load();
+    });
+
+    allFilter.addEventListener("click", () => {
+      state.includeReacted = true;
+      allFilter.classList.add("active");
+      pendingFilter.classList.remove("active");
+      load();
+    });
+
+    refresh.addEventListener("click", load);
+
+    runAnalysis.addEventListener("click", async () => {
+      runAnalysis.disabled = true;
+      try {
+        await requestJson("/api/agent/analyze", { method: "POST" });
+        await load();
+      } catch (error) {
+        setMessage(error.message, "error");
+      } finally {
+        runAnalysis.disabled = false;
+      }
+    });
+
+    load();
+  </script>
+</body>
+</html>

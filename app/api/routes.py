@@ -9,7 +9,9 @@ REST API для Exocortex.
 
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, HTTPException
+from fastapi.responses import HTMLResponse
 from pydantic import BaseModel, Field
+from pathlib import Path
 from typing import Optional, List, Dict, Any
 
 from app.agents.insights import Digest, Insight
@@ -186,6 +188,8 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
+WEB_UI_PATH = Path(__file__).resolve().parent.parent / "web" / "inbox.html"
+
 # Глобальный репозиторий (в будущем можно вынести в dependency injection)
 _repository: Optional[GraphRepository] = None
 _llm_service: Optional[LLMService] = None
@@ -294,8 +298,17 @@ async def root():
     return {
         "message": "Welcome to Exocortex API",
         "version": "0.1.0",
-        "docs": "/docs"
+        "docs": "/docs",
+        "app": "/app",
     }
+
+
+@app.get("/app", response_class=HTMLResponse)
+async def web_app():
+    """Serve the built-in web inbox."""
+    if not WEB_UI_PATH.exists():
+        raise HTTPException(status_code=404, detail="Web UI not found")
+    return HTMLResponse(WEB_UI_PATH.read_text(encoding="utf-8"))
 
 
 @app.post("/api/knowledge", response_model=AddKnowledgeResponse)
