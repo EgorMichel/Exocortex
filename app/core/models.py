@@ -22,6 +22,7 @@ def utc_now() -> datetime:
 class NodeType(Enum):
     """Типы узлов графа знаний."""
     FACT = "fact"           # Конкретный факт
+    EXCERPT = "excerpt"     # Фрагмент, вручную выделенный пользователем
     CONCEPT = "concept"     # Абстрактная концепция
     THESIS = "thesis"       # Тезис/утверждение
     DEFINITION = "definition"  # Определение термина

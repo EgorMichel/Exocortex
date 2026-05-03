@@ -1,0 +1,448 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Exocortex Reader</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --bg: #f6f7f8;
+      --panel: #ffffff;
+      --panel-muted: #eef2f4;
+      --text: #1b232c;
+      --muted: #637082;
+      --line: #d8dee6;
+      --accent: #1f6f5b;
+      --accent-strong: #165444;
+      --danger: #a33a3a;
+      --shadow: 0 14px 32px rgba(20, 30, 45, 0.08);
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      min-height: 100vh;
+      background: var(--bg);
+      color: var(--text);
+      font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      font-size: 15px;
+      letter-spacing: 0;
+    }
+
+    button,
+    input {
+      font: inherit;
+    }
+
+    button {
+      min-height: 36px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: var(--panel);
+      color: var(--text);
+      cursor: pointer;
+      padding: 0 12px;
+    }
+
+    button:hover {
+      border-color: #aeb8c5;
+      background: #f9fafb;
+    }
+
+    button.primary {
+      background: var(--accent);
+      border-color: var(--accent);
+      color: #ffffff;
+    }
+
+    button.primary:hover {
+      background: var(--accent-strong);
+      border-color: var(--accent-strong);
+    }
+
+    button:disabled {
+      cursor: not-allowed;
+      opacity: 0.55;
+    }
+
+    .shell {
+      width: min(1120px, calc(100% - 32px));
+      margin: 0 auto;
+      padding: 20px 0;
+    }
+
+    header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 16px;
+      min-height: 56px;
+      border-bottom: 1px solid var(--line);
+      margin-bottom: 16px;
+    }
+
+    h1 {
+      margin: 0;
+      font-size: 24px;
+      line-height: 1.2;
+      font-weight: 700;
+    }
+
+    .toolbar,
+    .doc-meta {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      flex-wrap: wrap;
+    }
+
+    .file-label {
+      display: inline-flex;
+      align-items: center;
+      min-height: 36px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: var(--panel);
+      padding: 0 12px;
+      cursor: pointer;
+    }
+
+    .file-label:hover {
+      border-color: #aeb8c5;
+      background: #f9fafb;
+    }
+
+    .file-label input {
+      display: none;
+    }
+
+    .status {
+      margin-bottom: 12px;
+      min-height: 22px;
+      color: var(--muted);
+    }
+
+    .status.error {
+      color: var(--danger);
+    }
+
+    .doc-meta {
+      justify-content: space-between;
+      color: var(--muted);
+      margin-bottom: 8px;
+    }
+
+    .reader {
+      min-height: calc(100vh - 170px);
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      box-shadow: var(--shadow);
+      padding: 24px;
+      line-height: 1.65;
+      white-space: pre-wrap;
+      overflow-wrap: anywhere;
+      user-select: text;
+    }
+
+    .reader.empty {
+      color: var(--muted);
+    }
+
+    .menu {
+      position: fixed;
+      z-index: 10;
+      display: none;
+      min-width: 190px;
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      box-shadow: var(--shadow);
+      padding: 6px;
+    }
+
+    .menu.open {
+      display: grid;
+      gap: 4px;
+    }
+
+    .menu button {
+      width: 100%;
+      justify-content: flex-start;
+      text-align: left;
+      border-color: transparent;
+    }
+
+    @media (max-width: 680px) {
+      .shell {
+        width: min(100% - 20px, 720px);
+        padding-top: 12px;
+      }
+
+      header {
+        align-items: flex-start;
+        flex-direction: column;
+        padding-bottom: 12px;
+      }
+
+      .toolbar,
+      .doc-meta {
+        align-items: stretch;
+        flex-direction: column;
+        width: 100%;
+      }
+
+      button,
+      .file-label {
+        width: 100%;
+        justify-content: center;
+      }
+
+      .reader {
+        min-height: calc(100vh - 250px);
+        padding: 16px;
+      }
+    }
+  </style>
+</head>
+<body>
+  <div class="shell">
+    <header>
+      <h1>Exocortex Reader</h1>
+      <div class="toolbar">
+        <label class="file-label">
+          <input id="fileInput" type="file" accept=".txt,.md,.markdown,.html,.htm,text/*">
+          Open File
+        </label>
+        <button id="addSelection" class="primary" type="button">Add Selection</button>
+        <button id="clearReader" type="button">Clear</button>
+        <button id="openInbox" type="button">Inbox</button>
+      </div>
+    </header>
+
+    <div id="status" class="status"></div>
+    <div class="doc-meta">
+      <strong id="docTitle">No file loaded</strong>
+      <span id="selectionInfo">Select text, then right-click it.</span>
+    </div>
+    <main id="reader" class="reader empty">Open a UTF-8 text or Markdown file to start reading.</main>
+  </div>
+
+  <div id="menu" class="menu" role="menu">
+    <button id="menuAdd" class="primary" type="button">Add to Graph</button>
+  </div>
+
+  <script>
+    const state = {
+      documentTitle: null,
+      sourceUrl: null,
+      fileMetadata: {},
+      lastSelection: null,
+    };
+
+    const fileInput = document.querySelector("#fileInput");
+    const reader = document.querySelector("#reader");
+    const status = document.querySelector("#status");
+    const docTitle = document.querySelector("#docTitle");
+    const selectionInfo = document.querySelector("#selectionInfo");
+    const addSelection = document.querySelector("#addSelection");
+    const clearReader = document.querySelector("#clearReader");
+    const openInbox = document.querySelector("#openInbox");
+    const menu = document.querySelector("#menu");
+    const menuAdd = document.querySelector("#menuAdd");
+
+    function setStatus(text, isError = false) {
+      status.textContent = text || "";
+      status.classList.toggle("error", Boolean(isError));
+    }
+
+    function hideMenu() {
+      menu.classList.remove("open");
+    }
+
+    function showMenu(x, y) {
+      menu.classList.add("open");
+      const width = menu.offsetWidth || 190;
+      const height = menu.offsetHeight || 48;
+      const left = Math.min(x, window.innerWidth - width - 8);
+      const top = Math.min(y, window.innerHeight - height - 8);
+      menu.style.left = `${Math.max(8, left)}px`;
+      menu.style.top = `${Math.max(8, top)}px`;
+    }
+
+    function selectionInsideReader(range) {
+      return reader.contains(range.commonAncestorContainer);
+    }
+
+    function currentSelection() {
+      const selection = window.getSelection();
+      if (!selection || selection.rangeCount === 0) {
+        return null;
+      }
+
+      const rawText = selection.toString();
+      const text = rawText.trim();
+      if (!text) {
+        return null;
+      }
+
+      const range = selection.getRangeAt(0);
+      if (!selectionInsideReader(range)) {
+        return null;
+      }
+
+      const before = range.cloneRange();
+      before.selectNodeContents(reader);
+      before.setEnd(range.startContainer, range.startOffset);
+      const offsetStart = before.toString().length;
+      const offsetEnd = offsetStart + rawText.length;
+
+      return {
+        text,
+        offsetStart,
+        offsetEnd,
+        length: text.length,
+      };
+    }
+
+    function updateSelectionInfo() {
+      const selection = currentSelection();
+      state.lastSelection = selection;
+      selectionInfo.textContent = selection
+        ? `${selection.length} characters selected`
+        : "Select text, then right-click it.";
+    }
+
+    async function requestJson(url, options = {}) {
+      const response = await fetch(url, {
+        headers: { "Content-Type": "application/json" },
+        ...options,
+      });
+      if (!response.ok) {
+        let detail = `${response.status} ${response.statusText}`;
+        try {
+          const payload = await response.json();
+          detail = payload.detail || detail;
+        } catch {
+          // Keep HTTP fallback detail.
+        }
+        throw new Error(detail);
+      }
+      return response.json();
+    }
+
+    async function saveSelection(selection) {
+      if (!selection) {
+        setStatus("No selected text inside the reader.", true);
+        return;
+      }
+
+      addSelection.disabled = true;
+      menuAdd.disabled = true;
+      try {
+        const payload = {
+          text: selection.text,
+          source_type: "reader",
+          source_url: state.sourceUrl,
+          document_title: state.documentTitle,
+          metadata: {
+            ...state.fileMetadata,
+            offset_start: selection.offsetStart,
+            offset_end: selection.offsetEnd,
+            selected_length: selection.length,
+          },
+        };
+        const result = await requestJson("/api/manual-fragments", {
+          method: "POST",
+          body: JSON.stringify(payload),
+        });
+        setStatus(`Added excerpt ${result.node_id.slice(0, 8)}... to graph.`);
+      } catch (error) {
+        setStatus(error.message, true);
+      } finally {
+        addSelection.disabled = false;
+        menuAdd.disabled = false;
+        hideMenu();
+      }
+    }
+
+    fileInput.addEventListener("change", () => {
+      const file = fileInput.files && fileInput.files[0];
+      if (!file) {
+        return;
+      }
+
+      const fileReader = new FileReader();
+      fileReader.onload = () => {
+        const text = String(fileReader.result || "");
+        state.documentTitle = file.name;
+        state.sourceUrl = `local:${file.name}`;
+        state.fileMetadata = {
+          file_name: file.name,
+          file_size: file.size,
+          file_type: file.type || "text/plain",
+          entry_mode: "manual_selection",
+        };
+        docTitle.textContent = file.name;
+        reader.textContent = text || "The file is empty.";
+        reader.classList.toggle("empty", !text);
+        setStatus(`Loaded ${file.name}.`);
+        updateSelectionInfo();
+      };
+      fileReader.onerror = () => {
+        setStatus("Could not read the selected file.", true);
+      };
+      fileReader.readAsText(file, "utf-8");
+    });
+
+    reader.addEventListener("mouseup", updateSelectionInfo);
+    reader.addEventListener("keyup", updateSelectionInfo);
+    reader.addEventListener("contextmenu", (event) => {
+      updateSelectionInfo();
+      if (!state.lastSelection) {
+        hideMenu();
+        return;
+      }
+      event.preventDefault();
+      showMenu(event.clientX, event.clientY);
+    });
+
+    document.addEventListener("click", (event) => {
+      if (!menu.contains(event.target)) {
+        hideMenu();
+      }
+    });
+
+    addSelection.addEventListener("click", () => {
+      updateSelectionInfo();
+      saveSelection(state.lastSelection);
+    });
+
+    menuAdd.addEventListener("click", () => {
+      saveSelection(state.lastSelection);
+    });
+
+    clearReader.addEventListener("click", () => {
+      state.documentTitle = null;
+      state.sourceUrl = null;
+      state.fileMetadata = {};
+      state.lastSelection = null;
+      fileInput.value = "";
+      docTitle.textContent = "No file loaded";
+      reader.textContent = "Open a UTF-8 text or Markdown file to start reading.";
+      reader.classList.add("empty");
+      setStatus("");
+      updateSelectionInfo();
+      hideMenu();
+    });
+
+    openInbox.addEventListener("click", () => {
+      window.location.href = "/app";
+    });
+  </script>
+</body>
+</html>

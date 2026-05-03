@@ -60,8 +60,7 @@ class GraphRepository:
         if node_id not in self.graph:
             return None
         
-        data = self.graph.nodes[node_id]
-        return Node.from_dict(data)
+        return self._node_from_graph_data(node_id)
     
     def update_node(self, node: Node) -> bool:
         """
@@ -92,7 +91,7 @@ class GraphRepository:
     def get_all_nodes(self) -> List[Node]:
         """Получить все узлы графа."""
         return [
-            Node.from_dict(dict(self.graph.nodes[node_id]))
+            self._node_from_graph_data(node_id)
             for node_id in self.graph.nodes()
         ]
     
@@ -197,7 +196,7 @@ class GraphRepository:
         ).keys()
         
         return [
-            Node.from_dict(dict(self.graph.nodes[nid]))
+            self._node_from_graph_data(nid)
             for nid in neighbor_ids
             if nid != node_id
         ]
@@ -338,6 +337,12 @@ class GraphRepository:
             graph.add_edge(str(source), str(target), key=edge_id, **edge_data)
 
         return graph
+
+    def _node_from_graph_data(self, node_id: str) -> Node:
+        """Build a Node while preserving the graph key as the stable node id."""
+        data = dict(self.graph.nodes[node_id])
+        data.setdefault('id', str(node_id))
+        return Node.from_dict(data)
 
     def _decode_mapping(self, value: str) -> Dict[str, Any]:
         """Decode metadata saved either as JSON or legacy Python repr."""

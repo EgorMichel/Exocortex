@@ -14,6 +14,7 @@ from app.core.models import Node
 from app.core.repository import GraphRepository
 from app.llm.extraction import LLMService, extract_and_store
 from app.services.external_sources import ExternalSourceIngestor
+from app.services.manual_capture import store_manual_fragment
 from app.services.personalization import PersonalizationService
 
 
@@ -110,6 +111,22 @@ async def _cmd_add(args: argparse.Namespace) -> int:
     )
     print(f"Added fragment: {fragment.id}")
     print(f"Nodes created: {len(fragment.extracted_nodes)}")
+    print(f"Total nodes: {repo.get_stats()['total_nodes']}")
+    return 0
+
+
+def _cmd_add_manual(args: argparse.Namespace) -> int:
+    text = _read_input(args)
+    repo = _build_repository()
+    fragment, node = store_manual_fragment(
+        repository=repo,
+        text=text,
+        source_type=args.source_type,
+        source_url=args.source_url,
+        document_title=args.document_title,
+    )
+    print(f"Added manual fragment: {fragment.id}")
+    print(f"Node created: {node.id}")
     print(f"Total nodes: {repo.get_stats()['total_nodes']}")
     return 0
 
@@ -249,6 +266,18 @@ def build_parser() -> argparse.ArgumentParser:
     add_parser.add_argument("--source-type", default="manual", help="Source type label")
     add_parser.add_argument("--source-url", default=None, help="Optional source URL")
     add_parser.set_defaults(func=_cmd_add)
+
+    manual_parser = subparsers.add_parser(
+        "add-manual",
+        help="Store selected text as a graph node without LLM extraction",
+    )
+    manual_parser.add_argument("text", nargs="*", help="Selected text to store")
+    manual_parser.add_argument("--file", help="Read selected text from a UTF-8 file")
+    manual_parser.add_argument("--stdin", action="store_true", help="Read selected text from stdin")
+    manual_parser.add_argument("--source-type", default="manual_selection", help="Source type label")
+    manual_parser.add_argument("--source-url", default=None, help="Optional source URL or file path")
+    manual_parser.add_argument("--document-title", default=None, help="Optional document title")
+    manual_parser.set_defaults(func=_cmd_add_manual)
 
     stats_parser = subparsers.add_parser("stats", help="Show graph statistics")
     stats_parser.set_defaults(func=_cmd_stats)

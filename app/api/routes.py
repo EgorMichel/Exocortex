@@ -21,6 +21,7 @@ from app.config import load_settings
 from app.core.repository import GraphRepository
 from app.llm.extraction import extract_and_store, LLMService
 from app.services.external_sources import ExternalSourceIngestor
+from app.services.manual_capture import store_manual_fragment
 from app.services.personalization import InboxItem, InsightFeedback, PersonalizationService
 
 
@@ -46,6 +47,25 @@ class IngestSourceRequest(BaseModel):
     text: Optional[str] = Field(default=None, description="Текст для импорта")
     url: Optional[str] = Field(default=None, description="URL текстового источника")
     source_type: str = Field(default="external", description="Тип источника")
+
+
+class ManualFragmentRequest(BaseModel):
+    """Запрос на ручное сохранение выделенного фрагмента."""
+    text: str = Field(..., description="Выделенный текст", min_length=1)
+    source_type: str = Field(default="manual_selection", description="Тип источника")
+    source_url: Optional[str] = Field(default=None, description="URL или путь источника")
+    document_title: Optional[str] = Field(default=None, description="Название документа")
+    metadata: Dict[str, Any] = Field(default_factory=dict, description="Метаданные выделения")
+
+
+class ManualFragmentResponse(BaseModel):
+    """Ответ после ручного сохранения фрагмента."""
+    fragment_id: str
+    node_id: str
+    node_type: str
+    nodes_created: int
+    edges_created: int
+    summary: str
 
 
 class NodeResponse(BaseModel):
@@ -189,6 +209,7 @@ app = FastAPI(
 )
 
 WEB_UI_PATH = Path(__file__).resolve().parent.parent / "web" / "inbox.html"
+WEB_READER_PATH = Path(__file__).resolve().parent.parent / "web" / "reader.html"
 
 # Глобальный репозиторий (в будущем можно вынести в dependency injection)
 _repository: Optional[GraphRepository] = None
@@ -300,6 +321,7 @@ async def root():
         "version": "0.1.0",
         "docs": "/docs",
         "app": "/app",
+        "reader": "/reader",
     }
 
 
@@ -309,6 +331,14 @@ async def web_app():
     if not WEB_UI_PATH.exists():
         raise HTTPException(status_code=404, detail="Web UI not found")
     return HTMLResponse(WEB_UI_PATH.read_text(encoding="utf-8"))
+
+
+@app.get("/reader", response_class=HTMLResponse)
+async def web_reader():
+    """Serve the built-in manual capture reader."""
+    if not WEB_READER_PATH.exists():
+        raise HTTPException(status_code=404, detail="Reader UI not found")
+    return HTMLResponse(WEB_READER_PATH.read_text(encoding="utf-8"))
 
 
 @app.post("/api/knowledge", response_model=AddKnowledgeResponse)
@@ -371,6 +401,31 @@ async def ingest_source(request: IngestSourceRequest):
         )
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"Error ingesting source: {str(exc)}")
+
+
+@app.post("/api/manual-fragments", response_model=ManualFragmentResponse)
+async def add_manual_fragment(request: ManualFragmentRequest):
+    """Сохранить выделенный пользователем фрагмент без LLM-обработки."""
+    try:
+        fragment, node = store_manual_fragment(
+            repository=get_repository(),
+            text=request.text,
+            source_type=request.source_type,
+            source_url=request.source_url,
+            document_title=request.document_title,
+            metadata=request.metadata,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+    return ManualFragmentResponse(
+        fragment_id=fragment.id,
+        node_id=node.id,
+        node_type=node.node_type.value,
+        nodes_created=1,
+        edges_created=0,
+        summary=fragment.content[:200] + "..." if len(fragment.content) > 200 else fragment.content,
+    )
 
 
 @app.get("/api/nodes", response_model=NodeListResponse)

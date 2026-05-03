@@ -2,7 +2,7 @@
 
 ## Что такое Exocortex?
 
-Exocortex - персональная система управления знаниями на основе графа знаний и LLM. MVP умеет хранить узлы и связи, извлекать сущности из текста через настроенный LLM, анализировать граф проактивным агентом, формировать дайджесты инсайтов, принимать реакции пользователя, обновлять граф по feedback, строить базовый профиль интересов, импортировать внешние текстовые источники и работать через CLI/FastAPI.
+Exocortex - персональная система управления знаниями на основе графа знаний и LLM. MVP умеет хранить узлы и связи, извлекать сущности из текста через настроенный LLM, вручную сохранять выделенные фрагменты без LLM-обработки, анализировать граф проактивным агентом, формировать дайджесты инсайтов, принимать реакции пользователя, обновлять граф по feedback, строить базовый профиль интересов, импортировать внешние текстовые источники и работать через CLI/FastAPI.
 
 ## Требования
 
@@ -101,6 +101,7 @@ python -m app.main --host 0.0.0.0 --port 8000 --reload
 
 Документация FastAPI доступна на `/docs`.
 Встроенный inbox доступен на `/app`.
+WEB-читалка для ручного выделения доступна на `/reader`.
 
 ### CLI
 
@@ -114,6 +115,8 @@ python -m app.cli --help
 python -m app.cli add "Python is a programming language. It is used for data analysis."
 python -m app.cli add --file notes.txt --source-type note
 type notes.txt | python -m app.cli add --stdin
+python -m app.cli add-manual "Точный фрагмент для сохранения без LLM"
+python -m app.cli add-manual --file selection.txt --source-url local:article.md --document-title article.md
 python -m app.cli stats
 python -m app.cli list --limit 20
 python -m app.cli search Python
@@ -153,7 +156,9 @@ docker-compose up -d
 
 - `GET /` - статус API
 - `GET /app` - встроенный web UI для inbox и реакций
+- `GET /reader` - встроенная читалка для ручного сохранения выделенных фрагментов
 - `POST /api/knowledge` - добавить текст и извлечь знания
+- `POST /api/manual-fragments` - сохранить выделенный текст как узел `excerpt` без LLM-обработки
 - `POST /api/sources` - импортировать внешний источник: прямой текст или текстовый URL
 - `GET /api/nodes` - список узлов, фильтр по `node_type` или `search`
 - `GET /api/nodes/{node_id}` - узел по ID
@@ -193,6 +198,14 @@ curl -X POST http://127.0.0.1:8000/api/insights/<insight_id>/feedback ^
   -H "Content-Type: application/json" ^
   -d "{\"action\":\"useful\"}"
 curl http://127.0.0.1:8000/api/personalization
+```
+
+Ручное сохранение фрагмента без LLM:
+
+```bash
+curl -X POST http://127.0.0.1:8000/api/manual-fragments ^
+  -H "Content-Type: application/json" ^
+  -d "{\"text\":\"Этот фрагмент попадёт в граф без обработки моделью.\",\"source_type\":\"reader\",\"document_title\":\"notes.md\"}"
 ```
 
 ## Python API
@@ -257,6 +270,14 @@ python -m app.main
 
 Откройте `http://127.0.0.1:8000/app`.
 
+Reader UI:
+
+```bash
+python -m app.main
+```
+
+Откройте `http://127.0.0.1:8000/reader`, загрузите UTF-8 текстовый или Markdown-файл, выделите фрагмент, нажмите правой кнопкой мыши и выберите `Add to Graph`. Читалка отправляет на сервер только выделенный текст, имя файла и смещения выделения; LLM при этом не вызывается.
+
 ## Внешние источники
 
 Для импорта текстовых источников используйте CLI:
@@ -290,7 +311,7 @@ venv\Scripts\python -m pytest -q     # Windows
 python -m pytest -q                  # Linux/macOS после активации venv
 ```
 
-Текущий набор проверяет модели, репозиторий, LLM-извлечение, API-конфигурацию, CLI, проактивного агента, импорт источников, сохранение дайджестов, feedback-контур и персонализацию.
+Текущий набор проверяет модели, репозиторий, LLM-извлечение, API-конфигурацию, CLI, ручное добавление фрагментов, проактивного агента, импорт источников, сохранение дайджестов, feedback-контур и персонализацию.
 
 ## Статус MVP
 
@@ -302,10 +323,11 @@ python -m pytest -q                  # Linux/macOS после активации
 - сохранение и загрузка GEXF + JSON-фрагментов
 - LLM extraction pipeline без алгоритмического fallback-извлечения
 - REST API
-- CLI: `add`, `stats`, `list`, `search`, `forgotten`, `analyze`, `digest`, `inbox`, `react`, `interests`, `ingest`, `clear`
+- CLI: `add`, `add-manual`, `stats`, `list`, `search`, `forgotten`, `analyze`, `digest`, `inbox`, `react`, `interests`, `ingest`, `clear`
 - проактивный агент с поиском противоречий, неочевидных связей и забываемого контента
 - генерация и сохранение дайджестов инсайтов
 - inbox инсайтов, реакции пользователя и обновление графа по feedback
+- ручное сохранение выделенных фрагментов как узлов `excerpt` через API, CLI и `/reader`
 - базовая модель интересов и статистика взаимодействий
 - фоновый запуск агента через APScheduler
 - локальные векторные эмбеддинги для семантического сравнения узлов

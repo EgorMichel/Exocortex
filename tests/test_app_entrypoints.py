@@ -5,7 +5,7 @@ from app import cli
 from app.agents.insights import Digest, Insight, InsightStore, InsightType
 from app.api import routes
 from app.config import load_settings
-from app.core.models import Node, utc_now
+from app.core.models import Node, NodeType, utc_now
 from app.core.repository import GraphRepository
 
 
@@ -85,6 +85,25 @@ def test_web_app_is_served(monkeypatch, tmp_path):
     assert "/api/inbox" in app_response.text
 
 
+def test_reader_app_is_served(monkeypatch, tmp_path):
+    _disable_llm(monkeypatch)
+    monkeypatch.setenv("STORAGE_PATH", str(tmp_path / "reader_graph"))
+    routes._repository = None
+    routes._llm_service = None
+    routes._agent = None
+    routes._personalization_service = None
+
+    client = TestClient(routes.app)
+    root_response = client.get("/")
+    reader_response = client.get("/reader")
+
+    assert root_response.status_code == 200
+    assert root_response.json()["reader"] == "/reader"
+    assert reader_response.status_code == 200
+    assert "Exocortex Reader" in reader_response.text
+    assert "/api/manual-fragments" in reader_response.text
+
+
 def test_api_add_knowledge_uses_configured_storage(monkeypatch, tmp_path):
     _disable_llm(monkeypatch)
     storage_path = tmp_path / "api_graph"
@@ -149,6 +168,43 @@ def test_api_ingest_source_text(monkeypatch, tmp_path):
     assert repo.get_all_fragments()[0].source_type == "note"
 
 
+def test_api_add_manual_fragment_without_llm(monkeypatch, tmp_path):
+    _disable_llm(monkeypatch)
+    storage_path = tmp_path / "api_manual_graph"
+    monkeypatch.setenv("STORAGE_PATH", str(storage_path))
+    routes._repository = None
+    routes._llm_service = None
+    routes._agent = None
+    routes._personalization_service = None
+
+    client = TestClient(routes.app)
+    response = client.post(
+        "/api/manual-fragments",
+        json={
+            "text": "A manually selected excerpt should be stored verbatim.",
+            "source_type": "reader",
+            "source_url": "local:notes.md",
+            "document_title": "notes.md",
+            "metadata": {"offset_start": 10, "offset_end": 58},
+        },
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["nodes_created"] == 1
+    assert payload["edges_created"] == 0
+    assert payload["node_type"] == "excerpt"
+
+    repo = GraphRepository(storage_path=str(storage_path))
+    node = repo.get_node(payload["node_id"])
+    assert node is not None
+    assert node.node_type == NodeType.EXCERPT
+    assert node.content == "A manually selected excerpt should be stored verbatim."
+    assert node.metadata["entry_mode"] == "manual_selection"
+    assert node.metadata["document_title"] == "notes.md"
+    assert repo.get_all_fragments()[0].extracted_nodes == [node.id]
+
+
 def test_cli_add_stats_search_and_clear(monkeypatch, tmp_path, capsys):
     _disable_llm(monkeypatch)
     storage_path = tmp_path / "cli_graph"
@@ -169,6 +225,30 @@ def test_cli_add_stats_search_and_clear(monkeypatch, tmp_path, capsys):
     assert cli.main(["clear"]) == 0
     assert not storage_path.with_suffix(".gexf").exists()
     assert not storage_path.with_suffix(".fragments.json").exists()
+
+
+def test_cli_add_manual_stores_excerpt(monkeypatch, tmp_path, capsys):
+    _disable_llm(monkeypatch)
+    storage_path = tmp_path / "cli_manual_graph"
+    monkeypatch.setenv("STORAGE_PATH", str(storage_path))
+
+    assert cli.main([
+        "add-manual",
+        "Manual graph excerpt.",
+        "--source-url",
+        "local:manual.txt",
+        "--document-title",
+        "manual.txt",
+    ]) == 0
+    output = capsys.readouterr().out
+    assert "Added manual fragment:" in output
+    assert "Node created:" in output
+
+    repo = GraphRepository(storage_path=str(storage_path))
+    nodes = repo.get_all_nodes()
+    assert len(nodes) == 1
+    assert nodes[0].node_type == NodeType.EXCERPT
+    assert nodes[0].content == "Manual graph excerpt."
 
 
 def test_cli_analyze_and_digest(monkeypatch, tmp_path, capsys):
