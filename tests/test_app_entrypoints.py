@@ -24,6 +24,7 @@ def test_load_settings_reads_env(monkeypatch, tmp_path):
     monkeypatch.setenv("LLM_API_KEY", "test-key")
     monkeypatch.setenv("LLM_MODEL", "test-model")
     monkeypatch.setenv("LLM_API_BASE", "https://example.test/v1")
+    monkeypatch.setenv("AGENT_CONTRADICTION_BATCH_SIZE", "4")
 
     settings = load_settings(env_path=tmp_path / "missing.env")
 
@@ -32,6 +33,7 @@ def test_load_settings_reads_env(monkeypatch, tmp_path):
     assert settings.llm_api_key == "test-key"
     assert settings.llm_model == "test-model"
     assert settings.llm_api_base == "https://example.test/v1"
+    assert settings.agent_contradiction_batch_size == 4
 
 
 def test_load_settings_supports_ollama(monkeypatch, tmp_path):

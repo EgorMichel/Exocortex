@@ -109,6 +109,203 @@ def test_contradiction_detection_uses_llm_service(tmp_path):
     assert insights[0].metadata["statement_b"] == second.content
 
 
+def test_contradiction_detection_batches_openai_compatible_client(tmp_path):
+    repo = GraphRepository(storage_path=str(tmp_path / "graph"))
+    nodes = [
+        Node(content="Coffee improves sleep quality.", node_type=NodeType.THESIS, metadata={"topic": "coffee sleep"}),
+        Node(content="Coffee reduces sleep quality.", node_type=NodeType.THESIS, metadata={"topic": "coffee sleep"}),
+        Node(content="Coffee affects sleep quality.", node_type=NodeType.THESIS, metadata={"topic": "coffee sleep"}),
+    ]
+    for node in nodes:
+        repo.add_node(node)
+
+    class FakeMessage:
+        content = (
+            '{"results": ['
+            '{"pair_index": 1, "is_contradiction": true, "confidence": 0.9, '
+            '"title": "Coffee sleep conflict", "reason": "The statements disagree."},'
+            '{"pair_index": 2, "is_contradiction": false, "confidence": 0.2, '
+            '"title": "", "reason": ""},'
+            '{"pair_index": 3, "is_contradiction": false, "confidence": 0.2, '
+            '"title": "", "reason": ""}'
+            "]}"
+        )
+
+    class FakeChoice:
+        message = FakeMessage()
+
+    class FakeResponse:
+        choices = [FakeChoice()]
+
+    class FakeCompletions:
+        def __init__(self):
+            self.calls = 0
+            self.last_messages = None
+
+        async def create(self, **kwargs):
+            self.calls += 1
+            self.last_messages = kwargs["messages"]
+            return FakeResponse()
+
+    class FakeChat:
+        def __init__(self):
+            self.completions = FakeCompletions()
+
+    class FakeClient:
+        def __init__(self):
+            self.chat = FakeChat()
+
+    class FakeLLM:
+        def __init__(self):
+            self.client = FakeClient()
+            self.model = "fake-model"
+
+    llm = FakeLLM()
+    agent = ProactiveAgent(
+        repo,
+        llm_service=llm,
+        settings=AgentSettings(similarity_threshold=0.1, contradiction_batch_size=10),
+    )
+
+    insights = asyncio.run(agent.find_contradictions())
+
+    assert len(insights) == 1
+    assert insights[0].insight_type == InsightType.CONTRADICTION
+    assert llm.client.chat.completions.calls == 1
+    assert "Pair 1" in llm.client.chat.completions.last_messages[1]["content"]
+    assert "Pair 3" in llm.client.chat.completions.last_messages[1]["content"]
+
+
+def test_analyze_reuses_candidate_pairs_for_hidden_connections_and_contradictions(tmp_path):
+    repo = GraphRepository(storage_path=str(tmp_path / "graph"))
+    first = Node(
+        content="Coffee improves sleep quality.",
+        node_type=NodeType.THESIS,
+        metadata={"topic": "coffee sleep"},
+    )
+    second = Node(
+        content="Coffee reduces sleep quality.",
+        node_type=NodeType.THESIS,
+        metadata={"topic": "coffee sleep"},
+    )
+    repo.add_node(first)
+    repo.add_node(second)
+
+    class FakeLLM:
+        async def detect_contradiction(self, left, right):
+            return {"is_contradiction": False}
+
+    agent = ProactiveAgent(
+        repo,
+        llm_service=FakeLLM(),
+        settings=AgentSettings(similarity_threshold=0.1, digest_limit=5),
+    )
+    original_candidate_pairs = agent._candidate_pairs
+    calls = 0
+
+    def counted_candidate_pairs(*args, **kwargs):
+        nonlocal calls
+        calls += 1
+        return original_candidate_pairs(*args, **kwargs)
+
+    agent._candidate_pairs = counted_candidate_pairs
+
+    asyncio.run(agent.analyze(save=False))
+
+    assert calls == 1
+
+
+def test_contradictions_skip_candidate_pairs_without_usable_llm(tmp_path):
+    repo = GraphRepository(storage_path=str(tmp_path / "graph"))
+    repo.add_node(Node(content="Python supports data analysis."))
+    repo.add_node(Node(content="Python supports automation."))
+
+    class UnconfiguredLLM:
+        client = None
+
+    agent = ProactiveAgent(
+        repo,
+        llm_service=UnconfiguredLLM(),
+        settings=AgentSettings(similarity_threshold=0.1),
+    )
+    calls = 0
+
+    def counted_candidate_pairs(*args, **kwargs):
+        nonlocal calls
+        calls += 1
+        return []
+
+    agent._candidate_pairs = counted_candidate_pairs
+
+    insights = asyncio.run(agent.find_contradictions())
+
+    assert insights == []
+    assert calls == 0
+
+
+def test_saved_analysis_state_skips_unchanged_node_pairs(tmp_path):
+    repo = GraphRepository(storage_path=str(tmp_path / "graph"))
+    first = Node(content="Python supports data analysis.", metadata={"topic": "python data"})
+    second = Node(content="Python supports automation.", metadata={"topic": "python data"})
+    repo.add_node(first)
+    repo.add_node(second)
+
+    class FakeLLM:
+        def __init__(self):
+            self.calls = 0
+
+        async def detect_contradiction(self, left, right):
+            self.calls += 1
+            return {"is_contradiction": False}
+
+    llm = FakeLLM()
+    agent = ProactiveAgent(
+        repo,
+        llm_service=llm,
+        settings=AgentSettings(similarity_threshold=0.1, digest_limit=5),
+    )
+
+    first_digest = asyncio.run(agent.analyze(save=True))
+    second_digest = asyncio.run(agent.analyze(save=True))
+
+    assert first_digest.insights
+    assert second_digest.insights == []
+    assert llm.calls == 1
+    assert (tmp_path / "graph.analysis_state.json").exists()
+
+
+def test_analysis_state_rechecks_pairs_when_node_changes(tmp_path):
+    repo = GraphRepository(storage_path=str(tmp_path / "graph"))
+    first = Node(content="Python supports data analysis.", metadata={"topic": "python data"})
+    second = Node(content="Python supports automation.", metadata={"topic": "python data"})
+    repo.add_node(first)
+    repo.add_node(second)
+
+    class FakeLLM:
+        def __init__(self):
+            self.calls = 0
+
+        async def detect_contradiction(self, left, right):
+            self.calls += 1
+            return {"is_contradiction": False}
+
+    llm = FakeLLM()
+    agent = ProactiveAgent(
+        repo,
+        llm_service=llm,
+        settings=AgentSettings(similarity_threshold=0.1, digest_limit=5),
+    )
+
+    asyncio.run(agent.analyze(save=True))
+    changed = repo.get_node(first.id)
+    changed.content = "Python supports data analysis and reporting."
+    repo.update_node(changed)
+    digest = asyncio.run(agent.analyze(save=True))
+
+    assert digest.insights
+    assert llm.calls == 2
+
+
 def test_digest_prioritizes_contradictions_before_other_insights(tmp_path):
     repo = GraphRepository(storage_path=str(tmp_path / "graph"))
     agent = ProactiveAgent(repo, settings=AgentSettings(digest_limit=2))

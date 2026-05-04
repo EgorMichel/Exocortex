@@ -32,6 +32,7 @@ class AppSettings:
     agent_interval_minutes: int = 1440
     agent_digest_limit: int = 3
     agent_forgotten_threshold: float = 0.3
+    agent_contradiction_batch_size: int = 8
 
 
 def _getenv_bool(name: str, default: bool = False) -> bool:
@@ -88,4 +89,5 @@ def load_settings(env_path: str | Path = DEFAULT_ENV_PATH) -> AppSettings:
         agent_interval_minutes=_getenv_int("AGENT_INTERVAL_MINUTES", 1440),
         agent_digest_limit=_getenv_int("AGENT_DIGEST_LIMIT", 3),
         agent_forgotten_threshold=_getenv_float("AGENT_FORGOTTEN_THRESHOLD", 0.3),
+        agent_contradiction_batch_size=_getenv_int("AGENT_CONTRADICTION_BATCH_SIZE", 8),
     )

@@ -41,6 +41,7 @@ def _build_agent(repo: Optional[GraphRepository] = None) -> ProactiveAgent:
         settings=AgentSettings(
             digest_limit=settings.agent_digest_limit,
             forgotten_threshold=settings.agent_forgotten_threshold,
+            contradiction_batch_size=settings.agent_contradiction_batch_size,
         ),
     )
 
