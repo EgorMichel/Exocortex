@@ -60,6 +60,53 @@ class TestLLMExtraction:
 
         assert result == ExtractionResult()
         assert "no LLM client configured" in capsys.readouterr().out
+
+    def test_extraction_prompt_requires_russian_human_readable_values(self):
+        service = LLMService(api_key=None)
+
+        prompt = service._get_extraction_prompt("Python is a programming language.")
+
+        assert "must be written in Russian" in prompt
+        assert "source text language" in prompt
+        assert "Write all facts, names, descriptions, comments, and summaries in Russian" in prompt
+
+    def test_extract_knowledge_system_message_requires_russian_output(self):
+        class FakeCompletions:
+            def __init__(self):
+                self.last_messages = None
+
+            async def create(self, **kwargs):
+                self.last_messages = kwargs["messages"]
+
+                class Message:
+                    content = '{"entities": [], "relations": [], "summary": "Готово."}'
+
+                class Choice:
+                    message = Message()
+
+                class Response:
+                    choices = [Choice()]
+
+                return Response()
+
+        class FakeChat:
+            def __init__(self):
+                self.completions = FakeCompletions()
+
+        class FakeClient:
+            def __init__(self):
+                self.chat = FakeChat()
+
+        service = LLMService(api_key=None)
+        service.client = FakeClient()
+
+        result = asyncio.run(service.extract_knowledge("Python is a programming language."))
+
+        system_message = service.client.chat.completions.last_messages[0]["content"]
+        assert result.summary == "Готово."
+        assert "valid JSON only" in system_message
+        assert "must be in Russian" in system_message
+        assert "source text language" in system_message
     
     def test_extraction_result_to_graph_elements(self):
         """Тест конвертации результата извлечения в элементы графа."""

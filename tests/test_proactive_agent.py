@@ -172,8 +172,36 @@ def test_contradiction_detection_batches_openai_compatible_client(tmp_path):
     assert len(insights) == 1
     assert insights[0].insight_type == InsightType.CONTRADICTION
     assert llm.client.chat.completions.calls == 1
-    assert "Pair 1" in llm.client.chat.completions.last_messages[1]["content"]
-    assert "Pair 3" in llm.client.chat.completions.last_messages[1]["content"]
+    assert "русском языке" in llm.client.chat.completions.last_messages[0]["content"]
+    assert "same language" not in llm.client.chat.completions.last_messages[0]["content"]
+    assert "на русском языке" in llm.client.chat.completions.last_messages[1]["content"]
+    assert "Пара 1" in llm.client.chat.completions.last_messages[1]["content"]
+    assert "Пара 3" in llm.client.chat.completions.last_messages[1]["content"]
+
+
+def test_contradiction_prompt_requires_russian_output(tmp_path):
+    repo = GraphRepository(storage_path=str(tmp_path / "graph"))
+    agent = ProactiveAgent(repo)
+
+    prompt = agent._contradiction_prompt(
+        "Python is a programming language.",
+        "Python is a large snake.",
+    )
+    batch_prompt = agent._contradiction_batch_prompt([
+        type(
+            "Pair",
+            (),
+            {
+                "left": type("Node", (), {"content": "Coffee improves sleep."})(),
+                "right": type("Node", (), {"content": "Coffee reduces sleep."})(),
+            },
+        )()
+    ])
+
+    assert "на русском языке" in prompt
+    assert "same language" not in prompt
+    assert "на русском языке" in batch_prompt
+    assert "same language" not in batch_prompt
 
 
 def test_analyze_reuses_candidate_pairs_for_hidden_connections_and_contradictions(tmp_path):

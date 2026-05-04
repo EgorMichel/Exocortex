@@ -196,7 +196,7 @@ class ProactiveAgent:
             insights.append(
                 Insight(
                     insight_type=InsightType.REMINDER,
-                    title="Refresh fading knowledge",
+                    title="Повторить забытое знание",
                     description=self._shorten(node.content),
                     node_ids=[node.id],
                     score=score,
@@ -222,7 +222,7 @@ class ProactiveAgent:
             insights.append(
                 Insight(
                     insight_type=InsightType.HIDDEN_CONNECTION,
-                    title="Possible hidden connection",
+                    title="Возможная скрытая связь",
                     description=(
                         f"{self._shorten(pair.left.content)} <-> "
                         f"{self._shorten(pair.right.content)}"
@@ -257,7 +257,7 @@ class ProactiveAgent:
                 continue
 
             confidence = float(detection.get("confidence", pair.score))
-            reason = str(detection.get("reason") or "Potential contradiction detected.")
+            reason = str(detection.get("reason") or "Обнаружено возможное противоречие.")
             title = str(
                 detection.get("title")
                 or self._default_contradiction_title(pair.left.content, pair.right.content)
@@ -438,9 +438,10 @@ class ProactiveAgent:
                     {
                         "role": "system",
                         "content": (
-                            "You detect contradictions. Return JSON only. "
-                            "Write title and reason in the same language as the compared statements. "
-                            "If the statements use different languages, use the language of Statement A."
+                            "Ты определяешь противоречия. Верни только JSON. "
+                            "Все человекочитаемые значения JSON должны быть на русском языке. "
+                            "Это включает title и reason. Не используй другой язык, "
+                            "даже если сравниваемые утверждения написаны не на русском."
                         ),
                     },
                     {"role": "user", "content": prompt},
@@ -501,9 +502,10 @@ class ProactiveAgent:
                     {
                         "role": "system",
                         "content": (
-                            "You detect contradictions. Return JSON only. "
-                            "Write titles and reasons in the same language as each pair's statements. "
-                            "If a pair uses different languages, use the language of Statement A."
+                            "Ты определяешь противоречия. Верни только JSON. "
+                            "Все человекочитаемые значения JSON должны быть на русском языке. "
+                            "Это включает все title и reason. Не используй другой язык, "
+                            "даже если сравниваемые утверждения написаны не на русском."
                         ),
                     },
                     {"role": "user", "content": prompt},
@@ -738,8 +740,7 @@ class ProactiveAgent:
         return normalized if len(normalized) <= limit else f"{normalized[: limit - 3]}..."
 
     def _default_contradiction_title(self, left: str, right: str) -> str:
-        text = f"{left} {right}"
-        return "Потенциальное противоречие" if self._looks_cyrillic(text) else "Potential contradiction"
+        return "Потенциальное противоречие"
 
     def _looks_cyrillic(self, text: str) -> bool:
         letters = [char for char in text if char.isalpha()]
@@ -750,25 +751,26 @@ class ProactiveAgent:
 
     def _contradiction_prompt(self, left: str, right: str) -> str:
         return f"""
-Compare two knowledge graph statements and decide whether they contradict each other.
-Write the title and reason in the same language as the statements. If the statements use different languages, use the language of Statement A.
+Сравни два утверждения из графа знаний и определи, противоречат ли они друг другу.
+Напиши title и reason на русском языке независимо от языка утверждений.
+Не пиши человекочитаемые поля на английском, французском или любом другом языке.
 
-Statement A:
+Утверждение A:
 {left}
 
-Statement B:
+Утверждение B:
 {right}
 
-Return JSON with this exact structure:
+Верни JSON строго такой структуры:
 {{
   "is_contradiction": true,
   "confidence": 0.0,
-  "title": "short title",
-  "reason": "short explanation"
+  "title": "краткий заголовок на русском",
+  "reason": "краткое объяснение на русском"
 }}
 
-Use is_contradiction=false when statements are merely different, complementary, or unrelated.
-Return JSON only.
+Используй is_contradiction=false, если утверждения просто разные, дополняют друг друга или не связаны.
+Верни только JSON.
 """
 
     def _contradiction_batch_prompt(self, pairs: list[NodePair]) -> str:
@@ -776,35 +778,36 @@ Return JSON only.
         for index, pair in enumerate(pairs, start=1):
             pair_blocks.append(
                 f"""
-Pair {index}
-Statement A:
+Пара {index}
+Утверждение A:
 {pair.left.content}
 
-Statement B:
+Утверждение B:
 {pair.right.content}
 """
             )
 
         return f"""
-Compare each pair of knowledge graph statements and decide whether the statements in that pair contradict each other.
-Write each title and reason in the same language as that pair's statements. If a pair uses different languages, use the language of Statement A.
+Сравни каждую пару утверждений из графа знаний и определи, противоречат ли утверждения в этой паре друг другу.
+Напиши каждый title и reason на русском языке независимо от языка пары.
+Не пиши человекочитаемые поля на английском, французском или любом другом языке.
 
-Pairs:
+Пары:
 {"".join(pair_blocks)}
 
-Return JSON with this exact structure:
+Верни JSON строго такой структуры:
 {{
   "results": [
     {{
       "pair_index": 1,
       "is_contradiction": true,
       "confidence": 0.0,
-      "title": "short title",
-      "reason": "short explanation"
+      "title": "краткий заголовок на русском",
+      "reason": "краткое объяснение на русском"
     }}
   ]
 }}
 
-Include exactly one result for each pair. Use is_contradiction=false when statements are merely different, complementary, or unrelated.
-Return JSON only.
+Добавь ровно один result для каждой пары. Используй is_contradiction=false, если утверждения просто разные, дополняют друг друга или не связаны.
+Верни только JSON.
 """

@@ -107,6 +107,11 @@ You are a knowledge extraction assistant. Analyze the following text and extract
 1. Key entities (facts, concepts, theses, definitions, questions)
 2. Relationships between these entities
 
+All human-readable JSON values must be written in Russian, regardless of the
+source text language. This includes entity names, entity descriptions, relation
+descriptions, and the summary. Translate or summarize source content into
+Russian when necessary. Keep JSON keys and enum values exactly as specified.
+
 Text to analyze:
 {text}
 
@@ -138,6 +143,7 @@ Rules:
 - Don't create duplicate entities
 - Only create relationships that are explicitly stated or strongly implied
 - Set confidence based on how clear/certain the information is
+- Write all facts, names, descriptions, comments, and summaries in Russian
 - Return ONLY valid JSON, no additional text
 
 Respond in JSON format only.
@@ -163,7 +169,15 @@ Respond in JSON format only.
             response = await self.client.chat.completions.create(
                 model=self.model,
                 messages=[
-                    {"role": "system", "content": "You are a knowledge extraction assistant. Always respond with valid JSON only. Respond in the language in which you received the information."},
+                    {
+                        "role": "system",
+                        "content": (
+                            "You are a knowledge extraction assistant. "
+                            "Always respond with valid JSON only. "
+                            "All human-readable JSON values must be in Russian, "
+                            "regardless of the source text language."
+                        ),
+                    },
                     {"role": "user", "content": prompt}
                 ],
                 temperature=0.3,

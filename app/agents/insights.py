@@ -93,9 +93,9 @@ class Digest:
     def format_text(self) -> str:
         """Render a compact human-readable digest."""
         if not self.insights:
-            return "No proactive insights found."
+            return "Проактивные инсайты не найдены."
 
-        lines = [f"Digest {self.id}"]
+        lines = [f"Дайджест {self.id}"]
         for index, insight in enumerate(self.insights, start=1):
             lines.append(
                 f"{index}. [{insight.insight_type.value}] {insight.title} "
@@ -111,10 +111,7 @@ class Digest:
         return "\n".join(lines)
 
     def _statement_labels(self, statement_a: Any, statement_b: Any) -> tuple[str, str]:
-        text = f"{statement_a} {statement_b}"
-        if self._looks_cyrillic(text):
-            return "Утверждение A", "Утверждение B"
-        return "Statement A", "Statement B"
+        return "Утверждение A", "Утверждение B"
 
     def _looks_cyrillic(self, text: str) -> bool:
         letters = [char for char in text if char.isalpha()]
