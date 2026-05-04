@@ -12,7 +12,7 @@ from app.agents.proactive import AgentSettings, ProactiveAgent
 from app.config import load_settings
 from app.core.models import Node
 from app.core.repository import GraphRepository
-from app.llm.extraction import LLMService, extract_and_store
+from app.llm.extraction import LLMService
 from app.services.external_sources import ExternalSourceIngestor
 from app.services.manual_capture import store_manual_fragment
 from app.services.personalization import PersonalizationService
@@ -56,7 +56,9 @@ def _read_input(args: argparse.Namespace) -> str:
     chunks: list[str] = []
 
     if getattr(args, "file", None):
-        chunks.append(Path(args.file).read_text(encoding="utf-8"))
+        file_paths = args.file if isinstance(args.file, list) else [args.file]
+        for file_path in file_paths:
+            chunks.append(Path(file_path).read_text(encoding="utf-8"))
 
     if getattr(args, "stdin", False):
         chunks.append(sys.stdin.read())
@@ -101,17 +103,40 @@ def _print_nodes(nodes: Iterable[Node], limit: Optional[int] = None) -> None:
 
 
 async def _cmd_add(args: argparse.Namespace) -> int:
-    text = _read_input(args)
     repo = _build_repository()
-    fragment = await extract_and_store(
-        text=text,
-        repository=repo,
-        source_type=args.source_type,
-        source_url=args.source_url,
-        llm_service=_build_llm_service(),
-    )
-    print(f"Added fragment: {fragment.id}")
-    print(f"Nodes created: {len(fragment.extracted_nodes)}")
+    ingestor = ExternalSourceIngestor(repo, llm_service=_build_llm_service())
+    fragments = []
+
+    for file_path in args.file or []:
+        fragments.append(await ingestor.ingest_file(file_path, source_type=args.source_type or "file"))
+    for url in args.url or []:
+        fragments.append(await ingestor.ingest_url(url, source_type=args.source_type or "url"))
+
+    direct_chunks = []
+    if args.stdin:
+        direct_chunks.append(sys.stdin.read())
+    if args.text:
+        direct_chunks.append(" ".join(args.text))
+    direct_text = "\n".join(chunk.strip() for chunk in direct_chunks if chunk.strip()).strip()
+    if direct_text:
+        fragments.append(
+            await ingestor.ingest_text(
+                direct_text,
+                source_type=args.source_type or "manual",
+                source_url=args.source_url,
+            )
+        )
+
+    if not fragments:
+        raise ValueError("No sources provided. Pass text arguments, --file, --url, or --stdin.")
+
+    if len(fragments) == 1:
+        fragment = fragments[0]
+        print(f"Added fragment: {fragment.id}")
+    else:
+        print(f"Added sources: {len(fragments)}")
+        print(f"Fragments: {', '.join(fragment.id for fragment in fragments)}")
+    print(f"Nodes created: {sum(len(fragment.extracted_nodes) for fragment in fragments)}")
     print(f"Total nodes: {repo.get_stats()['total_nodes']}")
     return 0
 
@@ -164,6 +189,7 @@ def _cmd_clear(args: argparse.Namespace) -> int:
         storage_path.with_suffix(".fragments.json"),
         storage_path.with_suffix(".insights.json"),
         storage_path.with_suffix(".feedback.json"),
+        storage_path.with_suffix(".analysis_state.json"),
     ):
         if path.exists():
             path.unlink()
@@ -235,37 +261,17 @@ def _cmd_interests(args: argparse.Namespace) -> int:
     return 0
 
 
-async def _cmd_ingest(args: argparse.Namespace) -> int:
-    repo = _build_repository()
-    ingestor = ExternalSourceIngestor(repo, llm_service=_build_llm_service())
-    fragments = []
-
-    for file_path in args.file or []:
-        fragments.append(await ingestor.ingest_file(file_path))
-    for url in args.url or []:
-        fragments.append(await ingestor.ingest_url(url))
-    if args.text:
-        fragments.append(await ingestor.ingest_text(" ".join(args.text)))
-
-    if not fragments:
-        raise ValueError("No sources provided. Pass --file, --url, or text arguments.")
-
-    print(f"Ingested sources: {len(fragments)}")
-    print(f"Fragments: {', '.join(fragment.id for fragment in fragments)}")
-    print(f"Total nodes: {repo.get_stats()['total_nodes']}")
-    return 0
-
-
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="exocortex", description="Exocortex CLI")
     subparsers = parser.add_subparsers(dest="command", required=True)
 
-    add_parser = subparsers.add_parser("add", help="Extract and store knowledge from text")
-    add_parser.add_argument("text", nargs="*", help="Text to add")
-    add_parser.add_argument("--file", help="Read text from a UTF-8 file")
+    add_parser = subparsers.add_parser("add", help="Add text, files, or URLs with LLM extraction")
+    add_parser.add_argument("text", nargs="*", help="Direct text to add")
+    add_parser.add_argument("--file", action="append", help="Read a UTF-8 file; can be passed multiple times")
+    add_parser.add_argument("--url", action="append", help="Fetch and add a text URL; can be passed multiple times")
     add_parser.add_argument("--stdin", action="store_true", help="Read text from stdin")
-    add_parser.add_argument("--source-type", default="manual", help="Source type label")
-    add_parser.add_argument("--source-url", default=None, help="Optional source URL")
+    add_parser.add_argument("--source-type", default=None, help="Override source type label")
+    add_parser.add_argument("--source-url", default=None, help="Optional source URL for direct text/stdin")
     add_parser.set_defaults(func=_cmd_add)
 
     manual_parser = subparsers.add_parser(
@@ -327,12 +333,6 @@ def build_parser() -> argparse.ArgumentParser:
 
     interests_parser = subparsers.add_parser("interests", help="Show personalization profile")
     interests_parser.set_defaults(func=_cmd_interests)
-
-    ingest_parser = subparsers.add_parser("ingest", help="Ingest external text sources")
-    ingest_parser.add_argument("text", nargs="*", help="Direct text to ingest")
-    ingest_parser.add_argument("--file", action="append", help="Read an external UTF-8 file")
-    ingest_parser.add_argument("--url", action="append", help="Fetch and ingest a text URL")
-    ingest_parser.set_defaults(func=_cmd_ingest)
 
     return parser
 

@@ -248,11 +248,13 @@ python -m app.cli <command> --help
 
 ### `add`
 
-Извлекает знания из текста через LLM, создаёт `KnowledgeFragment`, узлы и связи, затем сохраняет граф.
+Добавляет прямой текст, UTF-8 файлы или текстовые URL через LLM-пайплайн, создаёт `KnowledgeFragment`, узлы и связи, затем сохраняет граф.
 
 ```bash
 python -m app.cli add "Python is a programming language. It is used for data analysis."
-python -m app.cli add --file notes.txt --source-type note
+python -m app.cli add --file notes.txt
+python -m app.cli add --file a.txt --file b.txt
+python -m app.cli add --url https://example.com/article.txt
 type notes.txt | python -m app.cli add --stdin
 ```
 
@@ -261,12 +263,15 @@ type notes.txt | python -m app.cli add --stdin
 | Параметр | Описание |
 | --- | --- |
 | `text` | Текст из позиционных аргументов. Можно передавать несколько слов или предложений. |
-| `--file <path>` | Прочитать UTF-8 файл. |
+| `--file <path>` | Прочитать UTF-8 файл. Можно передавать несколько раз. |
+| `--url <url>` | Загрузить текстовый URL. Можно передавать несколько раз. |
 | `--stdin` | Прочитать текст из stdin. |
-| `--source-type <type>` | Ярлык источника. По умолчанию `manual`. |
-| `--source-url <url>` | URL источника, который попадёт в metadata фрагмента. |
+| `--source-type <type>` | Переопределить ярлык источника. По умолчанию `manual` для текста/stdin, `file` для файлов, `url` для URL. |
+| `--source-url <url>` | URL источника для прямого текста и stdin. |
 
-Выводит ID созданного фрагмента, количество созданных узлов и общее число узлов.
+Для `--file` по умолчанию используется `source_type=file`, `source_url=<path>`. Для `--url` по умолчанию используется `source_type=url`, `source_url=<url>`. URL-импорт читает тело ответа как текст; HTML пока сохраняется как полученный текст без отдельного парсинга статьи.
+
+Выводит ID созданного фрагмента или список фрагментов, количество созданных узлов и общее число узлов.
 
 ### `add-manual`
 
@@ -475,29 +480,6 @@ python -m app.cli interests
 - `exploratory` - включается при нескольких позитивных реакциях;
 - `concise` - включается, если негативных реакций больше позитивных.
 
-### `ingest`
-
-Импортирует внешние текстовые источники через тот же LLM-пайплайн:
-
-```bash
-python -m app.cli ingest "Текст заметки для импорта"
-python -m app.cli ingest --file notes.txt
-python -m app.cli ingest --file a.txt --file b.txt
-python -m app.cli ingest --url https://example.com/article.txt
-```
-
-Параметры:
-
-| Параметр | Описание |
-| --- | --- |
-| `text` | Прямой текст из позиционных аргументов. |
-| `--file <path>` | UTF-8 файл. Можно передавать несколько раз. |
-| `--url <url>` | Текстовый URL. Можно передавать несколько раз. |
-
-Для `--file` используется `source_type=file`, `source_url=<path>`. Для `--url` используется `source_type=url`, `source_url=<url>`.
-
-URL-импорт читает тело ответа как текст. HTML не парсится как статья, а сохраняется как полученный текст.
-
 ### `clear`
 
 Удаляет сохранённые файлы текущего хранилища:
@@ -511,7 +493,8 @@ python -m app.cli clear
 - `<STORAGE_PATH>.gexf`;
 - `<STORAGE_PATH>.fragments.json`;
 - `<STORAGE_PATH>.insights.json`;
-- `<STORAGE_PATH>.feedback.json`.
+- `<STORAGE_PATH>.feedback.json`;
+- `<STORAGE_PATH>.analysis_state.json`.
 
 Команда выводит количество удалённых файлов.
 

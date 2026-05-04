@@ -37,17 +37,26 @@ class ExternalSourceIngestor:
             llm_service=self.llm_service,
         )
 
-    async def ingest_file(self, path: str | Path) -> KnowledgeFragment:
+    async def ingest_file(
+        self,
+        path: str | Path,
+        source_type: str = "file",
+    ) -> KnowledgeFragment:
         """Read a UTF-8 file and ingest its contents."""
         file_path = Path(path)
         text = file_path.read_text(encoding="utf-8")
         return await self.ingest_text(
             text=text,
-            source_type="file",
+            source_type=source_type,
             source_url=str(file_path),
         )
 
-    async def ingest_url(self, url: str, timeout: int = 15) -> KnowledgeFragment:
+    async def ingest_url(
+        self,
+        url: str,
+        timeout: int = 15,
+        source_type: str = "url",
+    ) -> KnowledgeFragment:
         """Fetch a text-like URL and ingest the response body."""
         request = Request(url, headers={"User-Agent": "Exocortex/0.1"})
         with urlopen(request, timeout=timeout) as response:
@@ -55,6 +64,6 @@ class ExternalSourceIngestor:
             text = response.read().decode(charset, errors="replace")
         return await self.ingest_text(
             text=text,
-            source_type="url",
+            source_type=source_type,
             source_url=url,
         )

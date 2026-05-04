@@ -115,7 +115,9 @@ python -m app.cli --help
 
 ```bash
 python -m app.cli add "Python is a programming language. It is used for data analysis."
-python -m app.cli add --file notes.txt --source-type note
+python -m app.cli add --file notes.txt
+python -m app.cli add --file a.txt --file b.txt
+python -m app.cli add --url https://example.com/article.txt
 type notes.txt | python -m app.cli add --stdin
 python -m app.cli add-manual "Точный фрагмент для сохранения без LLM"
 python -m app.cli add-manual --file selection.txt --source-url local:article.md --document-title article.md
@@ -128,8 +130,6 @@ python -m app.cli digest
 python -m app.cli inbox
 python -m app.cli react <insight_id> useful
 python -m app.cli interests
-python -m app.cli ingest --file notes.txt
-python -m app.cli ingest --url https://example.com/article.txt
 python -m app.cli clear
 ```
 
@@ -291,15 +291,19 @@ python -m app.main
 
 Откройте `http://127.0.0.1:8000/reader`, загрузите UTF-8 текстовый или Markdown-файл, выделите фрагмент, нажмите правой кнопкой мыши и выберите `Add to Graph`. Читалка отправляет на сервер только выделенный текст, имя файла и смещения выделения; LLM при этом не вызывается.
 
-## Внешние источники
+## Добавление текстовых источников
 
-Для импорта текстовых источников используйте CLI:
+Для добавления прямого текста, UTF-8 файлов и текстовых URL используйте `add`:
 
 ```bash
-python -m app.cli ingest "Текст заметки для импорта"
-python -m app.cli ingest --file notes.txt
-python -m app.cli ingest --url https://example.com/article.txt
+python -m app.cli add "Текст заметки для добавления"
+python -m app.cli add --file notes.txt
+python -m app.cli add --file a.txt --file b.txt
+python -m app.cli add --url https://example.com/article.txt
+type notes.txt | python -m app.cli add --stdin
 ```
+
+Для `--file` по умолчанию используется `source_type=file`, `source_url=<path>`. Для `--url` по умолчанию используется `source_type=url`, `source_url=<url>`. `--source-type` переопределяет ярлык источника, а `--source-url` применяется к прямому тексту и stdin.
 
 Или API:
 
@@ -336,7 +340,7 @@ python -m pytest -q                  # Linux/macOS после активации
 - сохранение и загрузка GEXF + JSON-фрагментов
 - LLM extraction pipeline без алгоритмического fallback-извлечения
 - REST API
-- CLI: `add`, `add-manual`, `stats`, `list`, `search`, `forgotten`, `analyze`, `digest`, `inbox`, `react`, `interests`, `ingest`, `clear`
+- CLI: `add`, `add-manual`, `stats`, `list`, `search`, `forgotten`, `analyze`, `digest`, `inbox`, `react`, `interests`, `clear`
 - проактивный агент с поиском противоречий, неочевидных связей и забываемого контента
 - оптимизированный анализ графа: общий подбор похожих пар, кэши terms/embeddings, батчинг LLM-противоречий и пропуск неизменившихся пар
 - генерация и сохранение дайджестов инсайтов
@@ -348,6 +352,6 @@ python -m pytest -q                  # Linux/macOS после активации
 - импорт внешних текстовых источников через CLI/API
 - запуск через `python -m app.main`
 - Docker Compose
-- 78 автоматических тестов
+- 80 автоматических тестов
 
 Следующий этап: доставка, мониторинг и подготовка к тестированию.

@@ -149,7 +149,7 @@ def test_api_agent_analyze_generates_digest(monkeypatch, tmp_path):
     assert storage_path.with_suffix(".insights.json").exists()
 
 
-def test_api_ingest_source_text(monkeypatch, tmp_path):
+def test_api_add_source_text(monkeypatch, tmp_path):
     _disable_llm(monkeypatch)
     storage_path = tmp_path / "api_source_graph"
     monkeypatch.setenv("STORAGE_PATH", str(storage_path))
@@ -273,21 +273,56 @@ def test_cli_analyze_and_digest(monkeypatch, tmp_path, capsys):
     assert "Digest" in digest_output
 
 
-def test_cli_ingest_file(monkeypatch, tmp_path, capsys):
+def test_cli_add_file(monkeypatch, tmp_path, capsys):
     _disable_llm(monkeypatch)
     storage_path = tmp_path / "cli_source_graph"
     source_file = tmp_path / "source.txt"
     source_file.write_text("External file knowledge.", encoding="utf-8")
     monkeypatch.setenv("STORAGE_PATH", str(storage_path))
 
-    assert cli.main(["ingest", "--file", str(source_file)]) == 0
+    assert cli.main(["add", "--file", str(source_file)]) == 0
     output = capsys.readouterr().out
-    assert "Ingested sources: 1" in output
+    assert "Added fragment:" in output
 
     repo = GraphRepository(storage_path=str(storage_path))
     fragments = repo.get_all_fragments()
     assert len(fragments) == 1
     assert fragments[0].source_type == "file"
+
+
+def test_cli_add_file_allows_source_type_override(monkeypatch, tmp_path, capsys):
+    _disable_llm(monkeypatch)
+    storage_path = tmp_path / "cli_source_override_graph"
+    source_file = tmp_path / "source.txt"
+    source_file.write_text("External file knowledge.", encoding="utf-8")
+    monkeypatch.setenv("STORAGE_PATH", str(storage_path))
+
+    assert cli.main(["add", "--file", str(source_file), "--source-type", "note"]) == 0
+    capsys.readouterr()
+
+    repo = GraphRepository(storage_path=str(storage_path))
+    fragments = repo.get_all_fragments()
+    assert len(fragments) == 1
+    assert fragments[0].source_type == "note"
+
+
+def test_cli_add_multiple_files(monkeypatch, tmp_path, capsys):
+    _disable_llm(monkeypatch)
+    storage_path = tmp_path / "cli_multi_source_graph"
+    first_file = tmp_path / "first.txt"
+    second_file = tmp_path / "second.txt"
+    first_file.write_text("First external file knowledge.", encoding="utf-8")
+    second_file.write_text("Second external file knowledge.", encoding="utf-8")
+    monkeypatch.setenv("STORAGE_PATH", str(storage_path))
+
+    assert cli.main(["add", "--file", str(first_file), "--file", str(second_file)]) == 0
+    output = capsys.readouterr().out
+    assert "Added sources: 2" in output
+
+    repo = GraphRepository(storage_path=str(storage_path))
+    fragments = repo.get_all_fragments()
+    assert len(fragments) == 2
+    assert {fragment.source_type for fragment in fragments} == {"file"}
 
 
 def test_api_inbox_feedback_and_personalization(monkeypatch, tmp_path):
