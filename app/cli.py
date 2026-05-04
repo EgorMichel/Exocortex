@@ -52,6 +52,11 @@ def _build_personalization_service(repo: Optional[GraphRepository] = None) -> Pe
     return PersonalizationService(repository=repository, insight_store=agent.insight_store)
 
 
+def _read_stdin_text() -> str:
+    """Read one line in an interactive shell, or the full stream when piped."""
+    return sys.stdin.readline() if sys.stdin.isatty() else sys.stdin.read()
+
+
 def _read_input(args: argparse.Namespace) -> str:
     chunks: list[str] = []
 
@@ -61,7 +66,7 @@ def _read_input(args: argparse.Namespace) -> str:
             chunks.append(Path(file_path).read_text(encoding="utf-8"))
 
     if getattr(args, "stdin", False):
-        chunks.append(sys.stdin.read())
+        chunks.append(_read_stdin_text())
 
     if getattr(args, "text", None):
         chunks.append(" ".join(args.text))
@@ -114,7 +119,7 @@ async def _cmd_add(args: argparse.Namespace) -> int:
 
     direct_chunks = []
     if args.stdin:
-        direct_chunks.append(sys.stdin.read())
+        direct_chunks.append(_read_stdin_text())
     if args.text:
         direct_chunks.append(" ".join(args.text))
     direct_text = "\n".join(chunk.strip() for chunk in direct_chunks if chunk.strip()).strip()
@@ -269,7 +274,11 @@ def build_parser() -> argparse.ArgumentParser:
     add_parser.add_argument("text", nargs="*", help="Direct text to add")
     add_parser.add_argument("--file", action="append", help="Read a UTF-8 file; can be passed multiple times")
     add_parser.add_argument("--url", action="append", help="Fetch and add a text URL; can be passed multiple times")
-    add_parser.add_argument("--stdin", action="store_true", help="Read text from stdin")
+    add_parser.add_argument(
+        "--stdin",
+        action="store_true",
+        help="Read text from stdin; in an interactive shell, finish with Enter",
+    )
     add_parser.add_argument("--source-type", default=None, help="Override source type label")
     add_parser.add_argument("--source-url", default=None, help="Optional source URL for direct text/stdin")
     add_parser.set_defaults(func=_cmd_add)
@@ -280,7 +289,11 @@ def build_parser() -> argparse.ArgumentParser:
     )
     manual_parser.add_argument("text", nargs="*", help="Selected text to store")
     manual_parser.add_argument("--file", help="Read selected text from a UTF-8 file")
-    manual_parser.add_argument("--stdin", action="store_true", help="Read selected text from stdin")
+    manual_parser.add_argument(
+        "--stdin",
+        action="store_true",
+        help="Read selected text from stdin; in an interactive shell, finish with Enter",
+    )
     manual_parser.add_argument("--source-type", default="manual_selection", help="Source type label")
     manual_parser.add_argument("--source-url", default=None, help="Optional source URL or file path")
     manual_parser.add_argument("--document-title", default=None, help="Optional document title")

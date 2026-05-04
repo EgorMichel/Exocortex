@@ -118,8 +118,10 @@ python -m app.cli add "Python is a programming language. It is used for data ana
 python -m app.cli add --file notes.txt
 python -m app.cli add --file a.txt --file b.txt
 python -m app.cli add --url https://example.com/article.txt
+python -m app.cli add --stdin
 type notes.txt | python -m app.cli add --stdin
 python -m app.cli add-manual "Точный фрагмент для сохранения без LLM"
+python -m app.cli add-manual --stdin
 python -m app.cli add-manual --file selection.txt --source-url local:article.md --document-title article.md
 python -m app.cli stats
 python -m app.cli list --limit 20
@@ -300,8 +302,11 @@ python -m app.cli add "Текст заметки для добавления"
 python -m app.cli add --file notes.txt
 python -m app.cli add --file a.txt --file b.txt
 python -m app.cli add --url https://example.com/article.txt
+python -m app.cli add --stdin
 type notes.txt | python -m app.cli add --stdin
 ```
+
+В интерактивной консоли `--stdin` читает одну строку и завершает ввод по Enter. При пайпе или редиректе (`type notes.txt | ...`) `--stdin` читает весь входной поток.
 
 Для `--file` по умолчанию используется `source_type=file`, `source_url=<path>`. Для `--url` по умолчанию используется `source_type=url`, `source_url=<url>`. `--source-type` переопределяет ярлык источника, а `--source-url` применяется к прямому тексту и stdin.
 

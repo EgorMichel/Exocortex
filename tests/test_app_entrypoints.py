@@ -1,3 +1,5 @@
+import io
+
 from fastapi.testclient import TestClient
 from datetime import timedelta
 
@@ -7,6 +9,11 @@ from app.api import routes
 from app.config import load_settings
 from app.core.models import Node, NodeType, utc_now
 from app.core.repository import GraphRepository
+
+
+class _InteractiveStdin(io.StringIO):
+    def isatty(self):
+        return True
 
 
 def _disable_llm(monkeypatch):
@@ -251,6 +258,53 @@ def test_cli_add_manual_stores_excerpt(monkeypatch, tmp_path, capsys):
     assert len(nodes) == 1
     assert nodes[0].node_type == NodeType.EXCERPT
     assert nodes[0].content == "Manual graph excerpt."
+
+
+def test_cli_add_stdin_interactive_finishes_on_enter(monkeypatch, tmp_path, capsys):
+    _disable_llm(monkeypatch)
+    storage_path = tmp_path / "cli_stdin_graph"
+    monkeypatch.setenv("STORAGE_PATH", str(storage_path))
+    monkeypatch.setattr(cli.sys, "stdin", _InteractiveStdin("Interactive stdin knowledge.\nSecond line.\n"))
+
+    assert cli.main(["add", "--stdin"]) == 0
+    output = capsys.readouterr().out
+    assert "Added fragment:" in output
+
+    repo = GraphRepository(storage_path=str(storage_path))
+    fragments = repo.get_all_fragments()
+    assert len(fragments) == 1
+    assert fragments[0].content == "Interactive stdin knowledge."
+
+
+def test_cli_add_stdin_pipe_reads_full_stream(monkeypatch, tmp_path, capsys):
+    _disable_llm(monkeypatch)
+    storage_path = tmp_path / "cli_pipe_graph"
+    monkeypatch.setenv("STORAGE_PATH", str(storage_path))
+    monkeypatch.setattr(cli.sys, "stdin", io.StringIO("First line.\nSecond line.\n"))
+
+    assert cli.main(["add", "--stdin"]) == 0
+    capsys.readouterr()
+
+    repo = GraphRepository(storage_path=str(storage_path))
+    fragments = repo.get_all_fragments()
+    assert len(fragments) == 1
+    assert fragments[0].content == "First line.\nSecond line."
+
+
+def test_cli_add_manual_stdin_interactive_finishes_on_enter(monkeypatch, tmp_path, capsys):
+    _disable_llm(monkeypatch)
+    storage_path = tmp_path / "cli_manual_stdin_graph"
+    monkeypatch.setenv("STORAGE_PATH", str(storage_path))
+    monkeypatch.setattr(cli.sys, "stdin", _InteractiveStdin("Manual stdin excerpt.\nSecond line.\n"))
+
+    assert cli.main(["add-manual", "--stdin"]) == 0
+    capsys.readouterr()
+
+    repo = GraphRepository(storage_path=str(storage_path))
+    nodes = repo.get_all_nodes()
+    assert len(nodes) == 1
+    assert nodes[0].node_type == NodeType.EXCERPT
+    assert nodes[0].content == "Manual stdin excerpt."
 
 
 def test_cli_analyze_and_digest(monkeypatch, tmp_path, capsys):
