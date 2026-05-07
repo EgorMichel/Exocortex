@@ -24,3 +24,4 @@ mypy>=1.0.0
 # Utilities
 python-dotenv>=1.0.0,<2.0.0
 pydantic>=2.0.0,<3.0.0
+PyMuPDF>=1.27.0,<2.0.0

@@ -92,6 +92,9 @@ def test_web_app_is_served(monkeypatch, tmp_path):
     assert app_response.status_code == 200
     assert "Exocortex Inbox" in app_response.text
     assert "/api/inbox" in app_response.text
+    assert 'id="themeToggle"' in app_response.text
+    assert "exocortex-theme" in app_response.text
+    assert ':root[data-theme="dark"]' in app_response.text
 
 
 def test_reader_app_is_served(monkeypatch, tmp_path):
@@ -111,6 +114,9 @@ def test_reader_app_is_served(monkeypatch, tmp_path):
     assert reader_response.status_code == 200
     assert "Exocortex Reader" in reader_response.text
     assert "/api/manual-fragments" in reader_response.text
+    assert 'id="themeToggle"' in reader_response.text
+    assert "exocortex-theme" in reader_response.text
+    assert ':root[data-theme="dark"]' in reader_response.text
 
 
 def test_api_add_knowledge_uses_configured_storage(monkeypatch, tmp_path):

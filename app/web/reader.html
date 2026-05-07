@@ -4,6 +4,16 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Exocortex Reader</title>
+  <script>
+    (() => {
+      try {
+        const savedTheme = localStorage.getItem("exocortex-theme");
+        document.documentElement.dataset.theme = savedTheme === "dark" ? "dark" : "light";
+      } catch {
+        document.documentElement.dataset.theme = "light";
+      }
+    })();
+  </script>
   <style>
     :root {
       color-scheme: light;
@@ -17,6 +27,24 @@
       --accent-strong: #165444;
       --danger: #a33a3a;
       --shadow: 0 14px 32px rgba(20, 30, 45, 0.08);
+      --button-hover-bg: #f9fafb;
+      --button-hover-border: #aeb8c5;
+    }
+
+    :root[data-theme="dark"] {
+      color-scheme: dark;
+      --bg: #101418;
+      --panel: #171d23;
+      --panel-muted: #232c35;
+      --text: #e6ebf1;
+      --muted: #98a6b5;
+      --line: #303a45;
+      --accent: #2f927b;
+      --accent-strong: #55c0a6;
+      --danger: #ff8f8f;
+      --shadow: 0 16px 36px rgba(0, 0, 0, 0.34);
+      --button-hover-bg: #202832;
+      --button-hover-border: #485665;
     }
 
     * {
@@ -49,8 +77,8 @@
     }
 
     button:hover {
-      border-color: #aeb8c5;
-      background: #f9fafb;
+      border-color: var(--button-hover-border);
+      background: var(--button-hover-bg);
     }
 
     button.primary {
@@ -112,12 +140,67 @@
     }
 
     .file-label:hover {
-      border-color: #aeb8c5;
-      background: #f9fafb;
+      border-color: var(--button-hover-border);
+      background: var(--button-hover-bg);
     }
 
     .file-label input {
       display: none;
+    }
+
+    .theme-toggle {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      min-height: 36px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: var(--panel);
+      color: var(--muted);
+      cursor: pointer;
+      font-size: 13px;
+      font-weight: 650;
+      padding: 0 10px;
+    }
+
+    .theme-toggle:hover {
+      border-color: var(--button-hover-border);
+      background: var(--button-hover-bg);
+    }
+
+    .theme-toggle input {
+      appearance: none;
+      position: relative;
+      width: 34px;
+      height: 20px;
+      margin: 0;
+      border: 1px solid var(--line);
+      border-radius: 999px;
+      background: var(--panel-muted);
+      cursor: pointer;
+      transition: background 0.16s ease, border-color 0.16s ease;
+    }
+
+    .theme-toggle input::before {
+      content: "";
+      position: absolute;
+      top: 2px;
+      left: 2px;
+      width: 14px;
+      height: 14px;
+      border-radius: 50%;
+      background: var(--panel);
+      box-shadow: 0 1px 4px rgba(20, 30, 45, 0.22);
+      transition: transform 0.16s ease;
+    }
+
+    .theme-toggle input:checked {
+      border-color: var(--accent);
+      background: var(--accent);
+    }
+
+    .theme-toggle input:checked::before {
+      transform: translateX(14px);
     }
 
     .status {
@@ -197,9 +280,18 @@
       }
 
       button,
-      .file-label {
+      .file-label,
+      .theme-toggle {
         width: 100%;
+      }
+
+      button,
+      .file-label {
         justify-content: center;
+      }
+
+      .theme-toggle {
+        justify-content: space-between;
       }
 
       .reader {
@@ -217,6 +309,10 @@
         <label class="file-label">
           <input id="fileInput" type="file" accept=".txt,.md,.markdown,.html,.htm,text/*">
           Open File
+        </label>
+        <label class="theme-toggle" title="Toggle dark theme">
+          <input id="themeToggle" type="checkbox" aria-label="Enable dark theme">
+          <span>Dark</span>
         </label>
         <button id="addSelection" class="primary" type="button">Add Selection</button>
         <button id="clearReader" type="button">Clear</button>
@@ -243,6 +339,7 @@
       fileMetadata: {},
       lastSelection: null,
     };
+    const THEME_STORAGE_KEY = "exocortex-theme";
 
     const fileInput = document.querySelector("#fileInput");
     const reader = document.querySelector("#reader");
@@ -254,6 +351,33 @@
     const openInbox = document.querySelector("#openInbox");
     const menu = document.querySelector("#menu");
     const menuAdd = document.querySelector("#menuAdd");
+    const themeToggle = document.querySelector("#themeToggle");
+
+    function applyTheme(theme) {
+      const normalizedTheme = theme === "dark" ? "dark" : "light";
+      document.documentElement.dataset.theme = normalizedTheme;
+      themeToggle.checked = normalizedTheme === "dark";
+      themeToggle.setAttribute(
+        "aria-label",
+        normalizedTheme === "dark" ? "Disable dark theme" : "Enable dark theme"
+      );
+    }
+
+    function loadTheme() {
+      try {
+        return localStorage.getItem(THEME_STORAGE_KEY) || "light";
+      } catch {
+        return "light";
+      }
+    }
+
+    function saveTheme(theme) {
+      try {
+        localStorage.setItem(THEME_STORAGE_KEY, theme);
+      } catch {
+        // Theme persistence is best-effort.
+      }
+    }
 
     function setStatus(text, isError = false) {
       status.textContent = text || "";
@@ -426,6 +550,12 @@
       saveSelection(state.lastSelection);
     });
 
+    themeToggle.addEventListener("change", () => {
+      const theme = themeToggle.checked ? "dark" : "light";
+      saveTheme(theme);
+      applyTheme(theme);
+    });
+
     clearReader.addEventListener("click", () => {
       state.documentTitle = null;
       state.sourceUrl = null;
@@ -443,6 +573,8 @@
     openInbox.addEventListener("click", () => {
       window.location.href = "/app";
     });
+
+    applyTheme(loadTheme());
   </script>
 </body>
 </html>
