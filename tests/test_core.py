@@ -53,6 +53,7 @@ class TestNode:
         original = Node(
             content="Test content",
             node_type=NodeType.THESIS,
+            source_text="Original source paragraph.",
             strength=0.9
         )
         
@@ -61,6 +62,7 @@ class TestNode:
         
         assert restored.id == original.id
         assert restored.content == original.content
+        assert restored.source_text == original.source_text
         assert restored.node_type == original.node_type
         assert restored.strength == original.strength
     

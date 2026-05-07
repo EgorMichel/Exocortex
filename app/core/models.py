@@ -50,6 +50,7 @@ class Node:
         id: Уникальный идентификатор узла
         node_type: Тип узла
         content: Основное содержание (текст)
+        source_text: Исходный текст/цитата, на котором основан узел
         metadata: Дополнительные метаданные
         strength: Сила памяти (0-1), увеличивается при взаимодействии
         decay_rate: Скорость забывания (0-1 в день)
@@ -60,6 +61,7 @@ class Node:
     content: str
     node_type: NodeType = NodeType.FACT
     id: str = field(default_factory=lambda: str(uuid.uuid4()))
+    source_text: Optional[str] = None
     metadata: Dict[str, Any] = field(default_factory=dict)
     strength: float = 1.0
     decay_rate: float = 0.01  # 1% в день по умолчанию
@@ -79,6 +81,7 @@ class Node:
             'id': self.id,
             'node_type': self.node_type.value,
             'content': self.content,
+            'source_text': self.source_text or '',
             'metadata': json.dumps(self.metadata),  # Сериализуем dict как JSON string
             'strength': self.strength,
             'decay_rate': self.decay_rate,
@@ -93,7 +96,8 @@ class Node:
         data = data.copy()
         # Удаляем служебные атрибуты NetworkX, которые не являются частью модели Node
         data.pop('label', None)
-        
+
+        data['source_text'] = data.get('source_text') or None
         data['node_type'] = NodeType(data['node_type'])
         data['metadata'] = json.loads(data['metadata']) if isinstance(data.get('metadata'), str) else data['metadata']
         embeddings_data = data.get('embeddings')

@@ -18,6 +18,7 @@ from app.agents.insights import Digest, Insight
 from app.agents.proactive import AgentSettings, ProactiveAgent
 from app.agents.scheduler import build_agent_scheduler
 from app.config import load_settings
+from app.core.models import NodeType
 from app.core.repository import GraphRepository
 from app.llm.extraction import extract_and_store, LLMService
 from app.services.external_sources import ExternalSourceIngestor
@@ -52,6 +53,8 @@ class IngestSourceRequest(BaseModel):
 class ManualFragmentRequest(BaseModel):
     """Запрос на ручное сохранение выделенного фрагмента."""
     text: str = Field(..., description="Выделенный текст", min_length=1)
+    source_text: Optional[str] = Field(default=None, description="Исходный текст или цитата")
+    node_type: Optional[str] = Field(default=None, description="Тип создаваемого узла")
     source_type: str = Field(default="manual_selection", description="Тип источника")
     source_url: Optional[str] = Field(default=None, description="URL или путь источника")
     document_title: Optional[str] = Field(default=None, description="Название документа")
@@ -73,6 +76,7 @@ class NodeResponse(BaseModel):
     id: str
     node_type: str
     content: str
+    source_text: Optional[str] = None
     strength: float
     created_at: str
     metadata: Dict[str, Any]
@@ -409,16 +413,25 @@ async def ingest_source(request: IngestSourceRequest):
 async def add_manual_fragment(request: ManualFragmentRequest):
     """Сохранить выделенный пользователем фрагмент без LLM-обработки."""
     try:
+        has_source_text = bool(request.source_text and request.source_text.strip())
+        node_type = NodeType(request.node_type) if request.node_type else (
+            NodeType.THESIS if has_source_text else NodeType.EXCERPT
+        )
         fragment, node = store_manual_fragment(
             repository=get_repository(),
             text=request.text,
             source_type=request.source_type,
             source_url=request.source_url,
             document_title=request.document_title,
+            source_text=request.source_text,
+            node_type=node_type,
             metadata=request.metadata,
         )
     except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc))
+        message = str(exc)
+        if "is not a valid NodeType" in message:
+            message = f"Invalid node_type: {request.node_type}"
+        raise HTTPException(status_code=400, detail=message)
 
     return ManualFragmentResponse(
         fragment_id=fragment.id,
@@ -426,7 +439,7 @@ async def add_manual_fragment(request: ManualFragmentRequest):
         node_type=node.node_type.value,
         nodes_created=1,
         edges_created=0,
-        summary=fragment.content[:200] + "..." if len(fragment.content) > 200 else fragment.content,
+        summary=node.content[:200] + "..." if len(node.content) > 200 else node.content,
     )
 
 
@@ -461,6 +474,7 @@ async def get_nodes(
                 id=n.id,
                 node_type=n.node_type.value,
                 content=n.content,
+                source_text=n.source_text,
                 strength=n.strength,
                 created_at=n.created_at.isoformat(),
                 metadata=n.metadata
@@ -484,6 +498,7 @@ async def get_node(node_id: str):
         id=node.id,
         node_type=node.node_type.value,
         content=node.content,
+        source_text=node.source_text,
         strength=node.strength,
         created_at=node.created_at.isoformat(),
         metadata=node.metadata
@@ -539,6 +554,7 @@ async def get_node_neighbors(node_id: str, radius: int = 1):
                 id=n.id,
                 node_type=n.node_type.value,
                 content=n.content,
+                source_text=n.source_text,
                 strength=n.strength,
                 created_at=n.created_at.isoformat(),
                 metadata=n.metadata

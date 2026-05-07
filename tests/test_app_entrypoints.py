@@ -115,6 +115,9 @@ def test_reader_app_is_served(monkeypatch, tmp_path):
     assert "Exocortex Reader" in reader_response.text
     assert "/api/manual-fragments" in reader_response.text
     assert 'id="themeToggle"' in reader_response.text
+    assert 'id="thoughtInput"' in reader_response.text
+    assert 'id="sourceInput"' in reader_response.text
+    assert 'id="menuAddSource"' in reader_response.text
     assert "exocortex-theme" in reader_response.text
     assert ':root[data-theme="dark"]' in reader_response.text
 
@@ -220,6 +223,42 @@ def test_api_add_manual_fragment_without_llm(monkeypatch, tmp_path):
     assert repo.get_all_fragments()[0].extracted_nodes == [node.id]
 
 
+def test_api_add_manual_thought_with_source_text(monkeypatch, tmp_path):
+    _disable_llm(monkeypatch)
+    storage_path = tmp_path / "api_manual_thought_graph"
+    monkeypatch.setenv("STORAGE_PATH", str(storage_path))
+    routes._repository = None
+    routes._llm_service = None
+    routes._agent = None
+    routes._personalization_service = None
+
+    client = TestClient(routes.app)
+    response = client.post(
+        "/api/manual-fragments",
+        json={
+            "text": "Capital accumulation can intensify bargaining asymmetry.",
+            "source_text": "A paragraph from the book about capital and labor bargaining.",
+            "source_type": "reader",
+            "source_url": "local:economics.txt",
+            "document_title": "economics.txt",
+            "metadata": {"entry_mode": "reader_thought"},
+        },
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["node_type"] == "thesis"
+    assert payload["summary"] == "Capital accumulation can intensify bargaining asymmetry."
+
+    repo = GraphRepository(storage_path=str(storage_path))
+    node = repo.get_node(payload["node_id"])
+    assert node is not None
+    assert node.node_type == NodeType.THESIS
+    assert node.content == "Capital accumulation can intensify bargaining asymmetry."
+    assert node.source_text == "A paragraph from the book about capital and labor bargaining."
+    assert repo.get_all_fragments()[0].content == node.source_text
+
+
 def test_cli_add_stats_search_and_clear(monkeypatch, tmp_path, capsys):
     _disable_llm(monkeypatch)
     storage_path = tmp_path / "cli_graph"
@@ -264,6 +303,27 @@ def test_cli_add_manual_stores_excerpt(monkeypatch, tmp_path, capsys):
     assert len(nodes) == 1
     assert nodes[0].node_type == NodeType.EXCERPT
     assert nodes[0].content == "Manual graph excerpt."
+
+
+def test_cli_add_manual_stores_thought_source(monkeypatch, tmp_path, capsys):
+    _disable_llm(monkeypatch)
+    storage_path = tmp_path / "cli_manual_thought_graph"
+    monkeypatch.setenv("STORAGE_PATH", str(storage_path))
+
+    assert cli.main([
+        "add-manual",
+        "Manual graph thought.",
+        "--source-text",
+        "Manual source excerpt.",
+    ]) == 0
+    capsys.readouterr()
+
+    repo = GraphRepository(storage_path=str(storage_path))
+    nodes = repo.get_all_nodes()
+    assert len(nodes) == 1
+    assert nodes[0].node_type == NodeType.THESIS
+    assert nodes[0].content == "Manual graph thought."
+    assert nodes[0].source_text == "Manual source excerpt."
 
 
 def test_cli_add_stdin_interactive_finishes_on_enter(monkeypatch, tmp_path, capsys):
@@ -330,7 +390,7 @@ def test_cli_analyze_and_digest(monkeypatch, tmp_path, capsys):
 
     assert cli.main(["digest"]) == 0
     digest_output = capsys.readouterr().out
-    assert "Digest" in digest_output
+    assert "Дайджест" in digest_output
 
 
 def test_cli_add_file(monkeypatch, tmp_path, capsys):

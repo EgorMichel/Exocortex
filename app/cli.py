@@ -10,7 +10,7 @@ from typing import Iterable, Optional
 
 from app.agents.proactive import AgentSettings, ProactiveAgent
 from app.config import load_settings
-from app.core.models import Node
+from app.core.models import Node, NodeType
 from app.core.repository import GraphRepository
 from app.llm.extraction import LLMService
 from app.services.external_sources import ExternalSourceIngestor
@@ -155,6 +155,8 @@ def _cmd_add_manual(args: argparse.Namespace) -> int:
         source_type=args.source_type,
         source_url=args.source_url,
         document_title=args.document_title,
+        source_text=args.source_text,
+        node_type=NodeType.THESIS if args.source_text else NodeType.EXCERPT,
     )
     print(f"Added manual fragment: {fragment.id}")
     print(f"Node created: {node.id}")
@@ -297,6 +299,7 @@ def build_parser() -> argparse.ArgumentParser:
     manual_parser.add_argument("--source-type", default="manual_selection", help="Source type label")
     manual_parser.add_argument("--source-url", default=None, help="Optional source URL or file path")
     manual_parser.add_argument("--document-title", default=None, help="Optional document title")
+    manual_parser.add_argument("--source-text", default=None, help="Optional source excerpt for the node")
     manual_parser.set_defaults(func=_cmd_add_manual)
 
     stats_parser = subparsers.add_parser("stats", help="Show graph statistics")

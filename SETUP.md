@@ -121,6 +121,7 @@ python -m app.cli add --url https://example.com/article.txt
 python -m app.cli add --stdin
 type notes.txt | python -m app.cli add --stdin
 python -m app.cli add-manual "Точный фрагмент для сохранения без LLM"
+python -m app.cli add-manual "Моя мысль по прочитанному" --source-text "Абзац-источник для этой мысли"
 python -m app.cli add-manual --stdin
 python -m app.cli add-manual --file selection.txt --source-url local:article.md --document-title article.md
 python -m app.cli stats
@@ -161,9 +162,9 @@ docker-compose up -d
 
 - `GET /` - статус API
 - `GET /app` - встроенный web UI для inbox и реакций
-- `GET /reader` - встроенная читалка для ручного сохранения выделенных фрагментов
+- `GET /reader` - встроенная читалка для ручного сохранения выделенных фрагментов и мыслей с источниками
 - `POST /api/knowledge` - добавить текст и извлечь знания
-- `POST /api/manual-fragments` - сохранить выделенный текст как узел `excerpt` без LLM-обработки
+- `POST /api/manual-fragments` - сохранить выделенный текст как `excerpt` или мысль с `source_text` как `thesis` без LLM-обработки
 - `POST /api/sources` - импортировать внешний источник: прямой текст или текстовый URL
 - `GET /api/nodes` - список узлов, фильтр по `node_type` или `search`
 - `GET /api/nodes/{node_id}` - узел по ID
@@ -213,6 +214,14 @@ curl -X POST http://127.0.0.1:8000/api/manual-fragments ^
   -d "{\"text\":\"Этот фрагмент попадёт в граф без обработки моделью.\",\"source_type\":\"reader\",\"document_title\":\"notes.md\"}"
 ```
 
+Ручное сохранение мысли с источником:
+
+```bash
+curl -X POST http://127.0.0.1:8000/api/manual-fragments ^
+  -H "Content-Type: application/json" ^
+  -d "{\"text\":\"Моя мысль по прочитанному.\",\"source_text\":\"Абзац-источник для этой мысли.\",\"node_type\":\"thesis\",\"source_type\":\"reader\",\"document_title\":\"book.md\"}"
+```
+
 ## Python API
 
 ```python
@@ -223,6 +232,7 @@ repo = GraphRepository("data/graph")
 node = Node(
     content="Machine learning is a subfield of artificial intelligence",
     node_type=NodeType.CONCEPT,
+    source_text="Source paragraph or note that supports the node.",
 )
 
 repo.add_node(node)
@@ -249,7 +259,7 @@ python -m app.cli digest
 Повторный анализ оптимизирован:
 
 - похожие пары узлов строятся один раз и переиспользуются для скрытых связей и противоречий
-- terms и embeddings кэшируются в рамках одного запуска
+- terms и embeddings кэшируются в рамках одного запуска; для ручных мыслей агент учитывает и `content`, и `source_text`
 - если LLM-клиент не настроен, проверка противоречий пропускается до лишней подготовки кандидатов
 - OpenAI-compatible проверка противоречий использует батчи по `AGENT_CONTRADICTION_BATCH_SIZE` пар в одном prompt
 - при запуске с сохранением агент пишет `.analysis_state.json` и в следующий раз пропускает пары, где оба узла и параметры анализа не изменились
@@ -291,7 +301,7 @@ Reader UI:
 python -m app.main
 ```
 
-Откройте `http://127.0.0.1:8000/reader`, загрузите UTF-8 текстовый или Markdown-файл, выделите фрагмент, нажмите правой кнопкой мыши и выберите `Add to Graph`. Читалка отправляет на сервер только выделенный текст, имя файла и смещения выделения; LLM при этом не вызывается.
+Откройте `http://127.0.0.1:8000/reader`, загрузите UTF-8 текстовый или Markdown-файл. Быстрый сценарий: выделите фрагмент, нажмите правой кнопкой мыши и выберите `Add to Graph`, чтобы сохранить его как `excerpt`. Сценарий для изучения книги: напишите мысль в правой панели, выделите абзац-источник и выберите `Add as Source`, при необходимости отредактируйте источник или скройте его кнопкой `Hide`, затем нажмите `Add Thought`. Читалка отправляет на сервер мысль, источник, имя файла и смещения выделения; LLM при этом не вызывается.
 
 ## Добавление текстовых источников
 
@@ -333,7 +343,7 @@ venv\Scripts\python -m pytest -q     # Windows
 python -m pytest -q                  # Linux/macOS после активации venv
 ```
 
-Текущий набор проверяет модели, репозиторий, LLM-извлечение, API-конфигурацию, CLI, ручное добавление фрагментов, проактивного агента, батчинг и инкрементальность анализа, импорт источников, сохранение дайджестов, feedback-контур и персонализацию.
+Текущий набор проверяет модели, репозиторий, LLM-извлечение, API-конфигурацию, CLI, ручное добавление фрагментов и мыслей с источниками, проактивного агента, батчинг и инкрементальность анализа, импорт источников, сохранение дайджестов, feedback-контур и персонализацию.
 
 ## Статус MVP
 
@@ -350,13 +360,13 @@ python -m pytest -q                  # Linux/macOS после активации
 - оптимизированный анализ графа: общий подбор похожих пар, кэши terms/embeddings, батчинг LLM-противоречий и пропуск неизменившихся пар
 - генерация и сохранение дайджестов инсайтов
 - inbox инсайтов, реакции пользователя и обновление графа по feedback
-- ручное сохранение выделенных фрагментов как узлов `excerpt` через API, CLI и `/reader`
+- ручное сохранение выделенных фрагментов как `excerpt` и мыслей с `source_text` как `thesis` через API, CLI и `/reader`
 - базовая модель интересов и статистика взаимодействий
 - фоновый запуск агента через APScheduler
 - локальные векторные эмбеддинги для семантического сравнения узлов
 - импорт внешних текстовых источников через CLI/API
 - запуск через `python -m app.main`
 - Docker Compose
-- 80 автоматических тестов
+- 89 автоматических тестов
 
 Следующий этап: доставка, мониторинг и подготовка к тестированию.

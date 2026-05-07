@@ -62,8 +62,26 @@
     }
 
     button,
-    input {
+    input,
+    textarea {
       font: inherit;
+    }
+
+    textarea {
+      width: 100%;
+      min-height: 120px;
+      resize: vertical;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: var(--panel);
+      color: var(--text);
+      line-height: 1.45;
+      padding: 10px 12px;
+    }
+
+    textarea:focus {
+      border-color: var(--accent);
+      outline: none;
     }
 
     button {
@@ -219,12 +237,23 @@
       margin-bottom: 8px;
     }
 
-    .reader {
+    .workspace {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) minmax(300px, 360px);
+      gap: 16px;
+      align-items: start;
+    }
+
+    .reader,
+    .capture-panel {
       min-height: calc(100vh - 170px);
       background: var(--panel);
       border: 1px solid var(--line);
       border-radius: 8px;
       box-shadow: var(--shadow);
+    }
+
+    .reader {
       padding: 24px;
       line-height: 1.65;
       white-space: pre-wrap;
@@ -234,6 +263,47 @@
 
     .reader.empty {
       color: var(--muted);
+    }
+
+    .capture-panel {
+      position: sticky;
+      top: 16px;
+      display: grid;
+      align-content: start;
+      gap: 14px;
+      padding: 16px;
+    }
+
+    .field {
+      display: grid;
+      gap: 7px;
+    }
+
+    .field label,
+    .source-actions label {
+      color: var(--muted);
+      font-size: 13px;
+      font-weight: 700;
+    }
+
+    .source-actions {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+    }
+
+    .source-field.collapsed textarea {
+      display: none;
+    }
+
+    .panel-actions {
+      display: flex;
+      gap: 8px;
+    }
+
+    .panel-actions button {
+      flex: 1;
     }
 
     .menu {
@@ -298,6 +368,19 @@
         min-height: calc(100vh - 250px);
         padding: 16px;
       }
+
+      .workspace {
+        grid-template-columns: 1fr;
+      }
+
+      .capture-panel {
+        position: static;
+        min-height: auto;
+      }
+
+      .panel-actions {
+        flex-direction: column;
+      }
     }
   </style>
 </head>
@@ -325,11 +408,30 @@
       <strong id="docTitle">No file loaded</strong>
       <span id="selectionInfo">Select text, then right-click it.</span>
     </div>
-    <main id="reader" class="reader empty">Open a UTF-8 text or Markdown file to start reading.</main>
+    <div class="workspace">
+      <main id="reader" class="reader empty">Open a UTF-8 text or Markdown file to start reading.</main>
+      <aside class="capture-panel" aria-label="Graph thought capture">
+        <div class="field">
+          <label for="thoughtInput">Thought</label>
+          <textarea id="thoughtInput" rows="7"></textarea>
+        </div>
+        <div id="sourceField" class="field source-field">
+          <div class="source-actions">
+            <label for="sourceInput">Source</label>
+            <button id="toggleSource" type="button">Hide</button>
+          </div>
+          <textarea id="sourceInput" rows="8"></textarea>
+        </div>
+        <div class="panel-actions">
+          <button id="saveThought" class="primary" type="button">Add Thought</button>
+        </div>
+      </aside>
+    </div>
   </div>
 
   <div id="menu" class="menu" role="menu">
     <button id="menuAdd" class="primary" type="button">Add to Graph</button>
+    <button id="menuAddSource" type="button">Add as Source</button>
   </div>
 
   <script>
@@ -338,6 +440,7 @@
       sourceUrl: null,
       fileMetadata: {},
       lastSelection: null,
+      sourceSelection: null,
     };
     const THEME_STORAGE_KEY = "exocortex-theme";
 
@@ -351,7 +454,13 @@
     const openInbox = document.querySelector("#openInbox");
     const menu = document.querySelector("#menu");
     const menuAdd = document.querySelector("#menuAdd");
+    const menuAddSource = document.querySelector("#menuAddSource");
     const themeToggle = document.querySelector("#themeToggle");
+    const thoughtInput = document.querySelector("#thoughtInput");
+    const sourceInput = document.querySelector("#sourceInput");
+    const sourceField = document.querySelector("#sourceField");
+    const toggleSource = document.querySelector("#toggleSource");
+    const saveThought = document.querySelector("#saveThought");
 
     function applyTheme(theme) {
       const normalizedTheme = theme === "dark" ? "dark" : "light";
@@ -494,6 +603,66 @@
       }
     }
 
+    function setSourceFromSelection(selection) {
+      if (!selection) {
+        setStatus("No selected text inside the reader.", true);
+        return;
+      }
+
+      sourceInput.value = selection.text;
+      state.sourceSelection = selection;
+      sourceField.classList.remove("collapsed");
+      toggleSource.textContent = "Hide";
+      setStatus("Added selection as source.");
+      hideMenu();
+    }
+
+    async function saveThoughtNode() {
+      const thought = thoughtInput.value.trim();
+      const sourceText = sourceInput.value.trim();
+      if (!thought) {
+        setStatus("Write a thought before adding it to the graph.", true);
+        thoughtInput.focus();
+        return;
+      }
+
+      saveThought.disabled = true;
+      try {
+        const sourceMetadata = state.sourceSelection
+          ? {
+              source_offset_start: state.sourceSelection.offsetStart,
+              source_offset_end: state.sourceSelection.offsetEnd,
+              source_selected_length: state.sourceSelection.length,
+            }
+          : {};
+        const payload = {
+          text: thought,
+          source_text: sourceText || null,
+          node_type: "thesis",
+          source_type: "reader",
+          source_url: state.sourceUrl,
+          document_title: state.documentTitle,
+          metadata: {
+            ...state.fileMetadata,
+            ...sourceMetadata,
+            entry_mode: "reader_thought",
+          },
+        };
+        const result = await requestJson("/api/manual-fragments", {
+          method: "POST",
+          body: JSON.stringify(payload),
+        });
+        thoughtInput.value = "";
+        sourceInput.value = "";
+        state.sourceSelection = null;
+        setStatus(`Added thought ${result.node_id.slice(0, 8)}... to graph.`);
+      } catch (error) {
+        setStatus(error.message, true);
+      } finally {
+        saveThought.disabled = false;
+      }
+    }
+
     fileInput.addEventListener("change", () => {
       const file = fileInput.files && fileInput.files[0];
       if (!file) {
@@ -511,6 +680,11 @@
           file_type: file.type || "text/plain",
           entry_mode: "manual_selection",
         };
+        state.sourceSelection = null;
+        thoughtInput.value = "";
+        sourceInput.value = "";
+        sourceField.classList.remove("collapsed");
+        toggleSource.textContent = "Hide";
         docTitle.textContent = file.name;
         reader.textContent = text || "The file is empty.";
         reader.classList.toggle("empty", !text);
@@ -550,6 +724,22 @@
       saveSelection(state.lastSelection);
     });
 
+    menuAddSource.addEventListener("click", () => {
+      setSourceFromSelection(state.lastSelection);
+    });
+
+    saveThought.addEventListener("click", saveThoughtNode);
+
+    toggleSource.addEventListener("click", () => {
+      const collapsed = !sourceField.classList.contains("collapsed");
+      sourceField.classList.toggle("collapsed", collapsed);
+      toggleSource.textContent = collapsed ? "Show" : "Hide";
+    });
+
+    sourceInput.addEventListener("input", () => {
+      state.sourceSelection = null;
+    });
+
     themeToggle.addEventListener("change", () => {
       const theme = themeToggle.checked ? "dark" : "light";
       saveTheme(theme);
@@ -561,6 +751,11 @@
       state.sourceUrl = null;
       state.fileMetadata = {};
       state.lastSelection = null;
+      state.sourceSelection = null;
+      thoughtInput.value = "";
+      sourceInput.value = "";
+      sourceField.classList.remove("collapsed");
+      toggleSource.textContent = "Hide";
       fileInput.value = "";
       docTitle.textContent = "No file loaded";
       reader.textContent = "Open a UTF-8 text or Markdown file to start reading.";

@@ -274,6 +274,8 @@ class ProactiveAgent:
                         "shared_terms": sorted(pair.shared_terms),
                         "statement_a": pair.left.content,
                         "statement_b": pair.right.content,
+                        "statement_a_source_text": pair.left.source_text,
+                        "statement_b_source_text": pair.right.source_text,
                         "statement_a_node_id": pair.left.id,
                         "statement_b_node_id": pair.right.id,
                     },
@@ -419,8 +421,10 @@ class ProactiveAgent:
 
     async def _detect_contradiction(self, left: Node, right: Node) -> dict[str, Any]:
         """Ask an LLM-like service whether two nodes contradict each other."""
+        left_text = self._node_analysis_text(left)
+        right_text = self._node_analysis_text(right)
         if hasattr(self.llm_service, "detect_contradiction"):
-            result = self.llm_service.detect_contradiction(left.content, right.content)
+            result = self.llm_service.detect_contradiction(left_text, right_text)
             if asyncio.iscoroutine(result):
                 result = await result
             return result if isinstance(result, dict) else {}
@@ -430,7 +434,7 @@ class ProactiveAgent:
         if not client:
             return {}
 
-        prompt = self._contradiction_prompt(left.content, right.content)
+        prompt = self._contradiction_prompt(left_text, right_text)
         try:
             response = await client.chat.completions.create(
                 model=model,
@@ -464,7 +468,10 @@ class ProactiveAgent:
 
         batch_detector = getattr(self.llm_service, "detect_contradictions", None)
         if callable(batch_detector):
-            payload = [(pair.left.content, pair.right.content) for pair in pairs]
+            payload = [
+                (self._node_analysis_text(pair.left), self._node_analysis_text(pair.right))
+                for pair in pairs
+            ]
             result = batch_detector(payload)
             if asyncio.iscoroutine(result):
                 result = await result
@@ -608,6 +615,7 @@ class ProactiveAgent:
         }
         payload = {
             "content": node.content,
+            "source_text": node.source_text,
             "node_type": node.node_type.value,
             "metadata": semantic_metadata,
         }
@@ -646,6 +654,15 @@ class ProactiveAgent:
     def _stable_hash(self, payload: Any) -> str:
         encoded = json.dumps(payload, ensure_ascii=False, sort_keys=True, default=str)
         return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
+
+    def _node_analysis_text(self, node: Node) -> str:
+        source_text = getattr(node, "source_text", None)
+        if not source_text:
+            return node.content
+        return (
+            f"Утверждение:\n{node.content}\n\n"
+            f"Источник/контекст:\n{source_text}"
+        )
 
     def _similarity(
         self,
@@ -694,7 +711,18 @@ class ProactiveAgent:
         return cache[node.id]
 
     def _embedding(self, node: Node) -> Optional[list[float]]:
-        if node.embeddings:
+        analysis_text = self._node_analysis_text(node)
+        embedding_fingerprint = self._stable_hash(
+            {
+                "analysis_text": analysis_text,
+                "service": self.embedding_service.__class__.__name__ if self.embedding_service else None,
+            }
+        )
+        existing_fingerprint = node.metadata.get("_embedding_fingerprint")
+        if node.embeddings and (
+            existing_fingerprint == embedding_fingerprint
+            or (existing_fingerprint is None and not node.source_text)
+        ):
             return node.embeddings
         if not self.embedding_service:
             return None
@@ -703,7 +731,8 @@ class ProactiveAgent:
         if not callable(embed):
             return None
 
-        node.embeddings = embed(node.content)
+        node.embeddings = embed(analysis_text)
+        node.metadata["_embedding_fingerprint"] = embedding_fingerprint
         self.repository.update_node(node)
         return node.embeddings
 
@@ -712,6 +741,7 @@ class ProactiveAgent:
             str(value)
             for value in (
                 node.content,
+                node.source_text or "",
                 node.metadata.get("original_name", ""),
                 node.metadata.get("topic", ""),
             )
@@ -780,10 +810,10 @@ class ProactiveAgent:
                 f"""
 Пара {index}
 Утверждение A:
-{pair.left.content}
+{self._node_analysis_text(pair.left)}
 
 Утверждение B:
-{pair.right.content}
+{self._node_analysis_text(pair.right)}
 """
             )
 

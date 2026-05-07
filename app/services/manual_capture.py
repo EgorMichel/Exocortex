@@ -14,6 +14,8 @@ def store_manual_fragment(
     source_type: str = "manual_selection",
     source_url: Optional[str] = None,
     document_title: Optional[str] = None,
+    source_text: Optional[str] = None,
+    node_type: NodeType = NodeType.EXCERPT,
     metadata: Optional[dict[str, Any]] = None,
 ) -> tuple[KnowledgeFragment, Node]:
     """Store a user-selected text fragment as a single graph node."""
@@ -21,8 +23,9 @@ def store_manual_fragment(
     if not content:
         raise ValueError("No text provided.")
 
+    source_content = source_text.strip() if source_text else None
     fragment = KnowledgeFragment(
-        content=content,
+        content=source_content or content,
         source_type=source_type,
         source_url=source_url,
     )
@@ -40,7 +43,8 @@ def store_manual_fragment(
 
     node = Node(
         content=content,
-        node_type=NodeType.EXCERPT,
+        node_type=node_type,
+        source_text=source_content,
         metadata=node_metadata,
     )
 

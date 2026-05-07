@@ -334,6 +334,42 @@ def test_analysis_state_rechecks_pairs_when_node_changes(tmp_path):
     assert llm.calls == 2
 
 
+def test_analysis_state_rechecks_pairs_when_source_text_changes(tmp_path):
+    repo = GraphRepository(storage_path=str(tmp_path / "graph"))
+    first = Node(
+        content="Python supports data analysis.",
+        source_text="Python is often used for data workflows.",
+        metadata={"topic": "python data"},
+    )
+    second = Node(content="Python supports automation.", metadata={"topic": "python data"})
+    repo.add_node(first)
+    repo.add_node(second)
+
+    class FakeLLM:
+        def __init__(self):
+            self.calls = 0
+
+        async def detect_contradiction(self, left, right):
+            self.calls += 1
+            return {"is_contradiction": False}
+
+    llm = FakeLLM()
+    agent = ProactiveAgent(
+        repo,
+        llm_service=llm,
+        settings=AgentSettings(similarity_threshold=0.1, digest_limit=5),
+    )
+
+    asyncio.run(agent.analyze(save=True))
+    changed = repo.get_node(first.id)
+    changed.source_text = "Python is frequently used for data workflows and automation."
+    repo.update_node(changed)
+    digest = asyncio.run(agent.analyze(save=True))
+
+    assert digest.insights
+    assert llm.calls == 2
+
+
 def test_digest_prioritizes_contradictions_before_other_insights(tmp_path):
     repo = GraphRepository(storage_path=str(tmp_path / "graph"))
     agent = ProactiveAgent(repo, settings=AgentSettings(digest_limit=2))
