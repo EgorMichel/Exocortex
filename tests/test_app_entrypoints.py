@@ -118,8 +118,33 @@ def test_reader_app_is_served(monkeypatch, tmp_path):
     assert 'id="thoughtInput"' in reader_response.text
     assert 'id="sourceInput"' in reader_response.text
     assert 'id="menuAddSource"' in reader_response.text
+    assert "Add as Idea" in reader_response.text
+    assert "Add as Source" in reader_response.text
+    assert 'id="openGraph"' in reader_response.text
     assert "exocortex-theme" in reader_response.text
     assert ':root[data-theme="dark"]' in reader_response.text
+
+
+def test_graph_app_is_served(monkeypatch, tmp_path):
+    _disable_llm(monkeypatch)
+    monkeypatch.setenv("STORAGE_PATH", str(tmp_path / "graph_app"))
+    routes._repository = None
+    routes._llm_service = None
+    routes._agent = None
+    routes._personalization_service = None
+
+    client = TestClient(routes.app)
+    root_response = client.get("/")
+    graph_response = client.get("/graph")
+
+    assert root_response.status_code == 200
+    assert root_response.json()["graph"] == "/graph"
+    assert graph_response.status_code == 200
+    assert "Exocortex Graph" in graph_response.text
+    assert "/api/nodes?limit=500" in graph_response.text
+    assert "/api/edges?limit=1000" in graph_response.text
+    assert 'id="themeToggle"' in graph_response.text
+    assert 'id="graphSvg"' in graph_response.text
 
 
 def test_api_add_knowledge_uses_configured_storage(monkeypatch, tmp_path):

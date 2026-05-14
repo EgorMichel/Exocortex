@@ -399,6 +399,7 @@
         </label>
         <button id="addSelection" class="primary" type="button">Add Selection</button>
         <button id="clearReader" type="button">Clear</button>
+        <button id="openGraph" type="button">Graph</button>
         <button id="openInbox" type="button">Inbox</button>
       </div>
     </header>
@@ -412,7 +413,7 @@
       <main id="reader" class="reader empty">Open a UTF-8 text or Markdown file to start reading.</main>
       <aside class="capture-panel" aria-label="Graph thought capture">
         <div class="field">
-          <label for="thoughtInput">Thought</label>
+          <label for="thoughtInput">Idea</label>
           <textarea id="thoughtInput" rows="7"></textarea>
         </div>
         <div id="sourceField" class="field source-field">
@@ -423,14 +424,14 @@
           <textarea id="sourceInput" rows="8"></textarea>
         </div>
         <div class="panel-actions">
-          <button id="saveThought" class="primary" type="button">Add Thought</button>
+          <button id="saveThought" class="primary" type="button">Add Idea</button>
         </div>
       </aside>
     </div>
   </div>
 
   <div id="menu" class="menu" role="menu">
-    <button id="menuAdd" class="primary" type="button">Add to Graph</button>
+    <button id="menuAdd" class="primary" type="button">Add as Idea</button>
     <button id="menuAddSource" type="button">Add as Source</button>
   </div>
 
@@ -451,6 +452,7 @@
     const selectionInfo = document.querySelector("#selectionInfo");
     const addSelection = document.querySelector("#addSelection");
     const clearReader = document.querySelector("#clearReader");
+    const openGraph = document.querySelector("#openGraph");
     const openInbox = document.querySelector("#openInbox");
     const menu = document.querySelector("#menu");
     const menuAdd = document.querySelector("#menuAdd");
@@ -617,11 +619,23 @@
       hideMenu();
     }
 
+    function setIdeaFromSelection(selection) {
+      if (!selection) {
+        setStatus("No selected text inside the reader.", true);
+        return;
+      }
+
+      thoughtInput.value = selection.text;
+      thoughtInput.focus();
+      setStatus("Added selection as idea.");
+      hideMenu();
+    }
+
     async function saveThoughtNode() {
       const thought = thoughtInput.value.trim();
       const sourceText = sourceInput.value.trim();
       if (!thought) {
-        setStatus("Write a thought before adding it to the graph.", true);
+        setStatus("Write an idea before adding it to the graph.", true);
         thoughtInput.focus();
         return;
       }
@@ -721,7 +735,7 @@
     });
 
     menuAdd.addEventListener("click", () => {
-      saveSelection(state.lastSelection);
+      setIdeaFromSelection(state.lastSelection);
     });
 
     menuAddSource.addEventListener("click", () => {
@@ -767,6 +781,10 @@
 
     openInbox.addEventListener("click", () => {
       window.location.href = "/app";
+    });
+
+    openGraph.addEventListener("click", () => {
+      window.location.href = "/graph";
     });
 
     applyTheme(loadTheme());

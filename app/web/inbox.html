@@ -475,6 +475,8 @@
           <input id="themeToggle" type="checkbox" aria-label="Enable dark theme">
           <span>Dark</span>
         </label>
+        <button id="openReader" type="button">Reader</button>
+        <button id="openGraph" type="button">Graph</button>
         <button id="runAnalysis" class="primary" type="button">Run Analysis</button>
         <button id="refresh" type="button">Refresh</button>
       </div>
@@ -547,6 +549,8 @@
     const runAnalysis = document.querySelector("#runAnalysis");
     const refresh = document.querySelector("#refresh");
     const themeToggle = document.querySelector("#themeToggle");
+    const openReader = document.querySelector("#openReader");
+    const openGraph = document.querySelector("#openGraph");
 
     function applyTheme(theme) {
       const normalizedTheme = theme === "dark" ? "dark" : "light";
@@ -715,6 +719,14 @@
     });
 
     refresh.addEventListener("click", load);
+
+    openReader.addEventListener("click", () => {
+      window.location.href = "/reader";
+    });
+
+    openGraph.addEventListener("click", () => {
+      window.location.href = "/graph";
+    });
 
     themeToggle.addEventListener("change", () => {
       const theme = themeToggle.checked ? "dark" : "light";

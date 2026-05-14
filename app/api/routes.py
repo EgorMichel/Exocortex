@@ -215,6 +215,7 @@ app = FastAPI(
 
 WEB_UI_PATH = Path(__file__).resolve().parent.parent / "web" / "inbox.html"
 WEB_READER_PATH = Path(__file__).resolve().parent.parent / "web" / "reader.html"
+WEB_GRAPH_PATH = Path(__file__).resolve().parent.parent / "web" / "graph.html"
 
 # Глобальный репозиторий (в будущем можно вынести в dependency injection)
 _repository: Optional[GraphRepository] = None
@@ -328,6 +329,7 @@ async def root():
         "docs": "/docs",
         "app": "/app",
         "reader": "/reader",
+        "graph": "/graph",
     }
 
 
@@ -345,6 +347,14 @@ async def web_reader():
     if not WEB_READER_PATH.exists():
         raise HTTPException(status_code=404, detail="Reader UI not found")
     return HTMLResponse(WEB_READER_PATH.read_text(encoding="utf-8"))
+
+
+@app.get("/graph", response_class=HTMLResponse)
+async def web_graph():
+    """Serve the built-in graph visualization."""
+    if not WEB_GRAPH_PATH.exists():
+        raise HTTPException(status_code=404, detail="Graph UI not found")
+    return HTMLResponse(WEB_GRAPH_PATH.read_text(encoding="utf-8"))
 
 
 @app.post("/api/knowledge", response_model=AddKnowledgeResponse)

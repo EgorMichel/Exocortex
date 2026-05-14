@@ -1,0 +1,1420 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Exocortex Graph</title>
+  <script>
+    (() => {
+      try {
+        const savedTheme = localStorage.getItem("exocortex-theme");
+        document.documentElement.dataset.theme = savedTheme === "dark" ? "dark" : "light";
+      } catch {
+        document.documentElement.dataset.theme = "light";
+      }
+    })();
+  </script>
+  <style>
+    :root {
+      color-scheme: light;
+      --bg: #f5f7f8;
+      --panel: #ffffff;
+      --panel-muted: #eef2f4;
+      --surface: #fbfcfd;
+      --text: #17212b;
+      --muted: #637284;
+      --line: #d7dfe7;
+      --accent: #1f6f5b;
+      --accent-strong: #165444;
+      --blue: #2f6f9f;
+      --violet: #76509a;
+      --amber: #a86427;
+      --green: #2d7562;
+      --red: #a33a3a;
+      --cyan: #357f8e;
+      --shadow: 0 14px 34px rgba(18, 29, 42, 0.08);
+      --button-hover-bg: #f9fafb;
+      --button-hover-border: #aeb8c5;
+      --graph-grid: rgba(95, 112, 132, 0.16);
+    }
+
+    :root[data-theme="dark"] {
+      color-scheme: dark;
+      --bg: #101418;
+      --panel: #171d23;
+      --panel-muted: #232c35;
+      --surface: #141a20;
+      --text: #e7edf3;
+      --muted: #98a6b5;
+      --line: #303a45;
+      --accent: #2f927b;
+      --accent-strong: #64c7ae;
+      --blue: #74aee0;
+      --violet: #b49ad5;
+      --amber: #d7a36d;
+      --green: #82c5ad;
+      --red: #f08f8f;
+      --cyan: #81c7d4;
+      --shadow: 0 16px 36px rgba(0, 0, 0, 0.34);
+      --button-hover-bg: #202832;
+      --button-hover-border: #485665;
+      --graph-grid: rgba(142, 158, 176, 0.12);
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      min-height: 100vh;
+      background: var(--bg);
+      color: var(--text);
+      font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      font-size: 14px;
+      letter-spacing: 0;
+    }
+
+    button,
+    input,
+    select,
+    textarea {
+      font: inherit;
+    }
+
+    button,
+    input,
+    select {
+      min-height: 36px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: var(--panel);
+      color: var(--text);
+      padding: 0 11px;
+    }
+
+    button {
+      cursor: pointer;
+    }
+
+    button:hover,
+    input:focus,
+    select:focus {
+      border-color: var(--button-hover-border);
+      background: var(--button-hover-bg);
+      outline: none;
+    }
+
+    button.primary {
+      border-color: var(--accent);
+      background: var(--accent);
+      color: #ffffff;
+    }
+
+    button.primary:hover {
+      border-color: var(--accent-strong);
+      background: var(--accent-strong);
+    }
+
+    button.icon {
+      width: 36px;
+      padding: 0;
+      font-weight: 800;
+    }
+
+    h1,
+    h2,
+    h3,
+    p {
+      margin: 0;
+    }
+
+    h1 {
+      font-size: 24px;
+      line-height: 1.2;
+      font-weight: 750;
+    }
+
+    h2 {
+      font-size: 15px;
+      line-height: 1.3;
+    }
+
+    h3 {
+      font-size: 14px;
+      line-height: 1.35;
+    }
+
+    .shell {
+      display: grid;
+      grid-template-columns: 286px minmax(0, 1fr) 330px;
+      grid-template-rows: auto minmax(0, 1fr);
+      gap: 14px;
+      width: min(1540px, calc(100% - 28px));
+      min-height: 100vh;
+      margin: 0 auto;
+      padding: 18px 0;
+    }
+
+    header {
+      grid-column: 1 / -1;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 16px;
+      min-height: 58px;
+      border-bottom: 1px solid var(--line);
+    }
+
+    .toolbar,
+    .row,
+    .chips,
+    .metric-row,
+    .legend,
+    .graph-tools {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      flex-wrap: wrap;
+    }
+
+    .toolbar {
+      justify-content: flex-end;
+    }
+
+    .view-tabs {
+      display: inline-grid;
+      grid-template-columns: repeat(3, minmax(80px, 1fr));
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: var(--panel);
+      overflow: hidden;
+      min-height: 36px;
+    }
+
+    .view-tabs button {
+      min-height: 34px;
+      border: 0;
+      border-radius: 0;
+      background: transparent;
+    }
+
+    .view-tabs button.active {
+      background: var(--panel-muted);
+      color: var(--accent-strong);
+      font-weight: 750;
+    }
+
+    .sidebar,
+    .inspector,
+    .graph-stage {
+      min-width: 0;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: var(--panel);
+      box-shadow: var(--shadow);
+    }
+
+    .sidebar,
+    .inspector {
+      display: grid;
+      align-content: start;
+      gap: 14px;
+      padding: 14px;
+      min-height: calc(100vh - 110px);
+    }
+
+    .section {
+      display: grid;
+      gap: 9px;
+    }
+
+    .section + .section {
+      border-top: 1px solid var(--line);
+      padding-top: 14px;
+    }
+
+    .label {
+      color: var(--muted);
+      font-size: 12px;
+      font-weight: 750;
+      text-transform: uppercase;
+    }
+
+    .metric {
+      flex: 1 1 94px;
+      min-height: 66px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: var(--surface);
+      padding: 10px;
+    }
+
+    .metric span {
+      display: block;
+      color: var(--muted);
+      font-size: 12px;
+      margin-bottom: 6px;
+    }
+
+    .metric strong {
+      font-size: 22px;
+      line-height: 1;
+    }
+
+    .chip,
+    .badge {
+      display: inline-flex;
+      align-items: center;
+      min-height: 25px;
+      border-radius: 999px;
+      padding: 0 9px;
+      background: var(--panel-muted);
+      color: var(--muted);
+      font-size: 12px;
+      font-weight: 750;
+    }
+
+    .chip {
+      border: 1px solid var(--line);
+      cursor: pointer;
+      user-select: none;
+    }
+
+    .chip.active {
+      border-color: var(--accent);
+      background: rgba(31, 111, 91, 0.12);
+      color: var(--accent-strong);
+    }
+
+    .chip.fact { color: var(--blue); }
+    .chip.thesis { color: var(--violet); }
+    .chip.excerpt { color: var(--amber); }
+    .chip.concept { color: var(--green); }
+    .chip.definition { color: var(--cyan); }
+    .chip.question { color: var(--red); }
+
+    .muted {
+      color: var(--muted);
+      line-height: 1.45;
+      overflow-wrap: anywhere;
+    }
+
+    .graph-stage {
+      position: relative;
+      min-height: calc(100vh - 110px);
+      overflow: hidden;
+      background:
+        linear-gradient(var(--graph-grid) 1px, transparent 1px),
+        linear-gradient(90deg, var(--graph-grid) 1px, transparent 1px);
+      background-size: 36px 36px;
+      background-color: var(--surface);
+    }
+
+    .graph-halo {
+      position: absolute;
+      inset: 0;
+      pointer-events: none;
+      opacity: 0.92;
+      background:
+        radial-gradient(circle at 28% 22%, rgba(47, 111, 159, 0.11), transparent 26%),
+        radial-gradient(circle at 72% 36%, rgba(122, 77, 148, 0.1), transparent 24%),
+        radial-gradient(circle at 48% 72%, rgba(31, 111, 91, 0.1), transparent 28%);
+    }
+
+    .graph-tools {
+      position: absolute;
+      z-index: 4;
+      left: 14px;
+      right: 14px;
+      top: 14px;
+      justify-content: space-between;
+      pointer-events: none;
+    }
+
+    .graph-tools > * {
+      pointer-events: auto;
+    }
+
+    .zoom {
+      display: inline-flex;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      overflow: hidden;
+      background: var(--panel);
+      box-shadow: 0 8px 20px rgba(20, 30, 45, 0.08);
+    }
+
+    .zoom button {
+      border: 0;
+      border-radius: 0;
+    }
+
+    .graph-status {
+      max-width: min(520px, 70%);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: color-mix(in srgb, var(--panel) 92%, transparent);
+      color: var(--muted);
+      box-shadow: 0 8px 20px rgba(20, 30, 45, 0.08);
+      padding: 9px 11px;
+      line-height: 1.35;
+    }
+
+    .graph-status.error {
+      color: var(--red);
+    }
+
+    svg {
+      position: absolute;
+      inset: 0;
+      width: 100%;
+      height: 100%;
+      touch-action: none;
+    }
+
+    .edge {
+      stroke: #94a2b3;
+      stroke-width: 1.6;
+      stroke-opacity: 0.62;
+      fill: none;
+      marker-end: url(#arrowDefault);
+    }
+
+    .edge.supports {
+      stroke: var(--green);
+      marker-end: url(#arrowGreen);
+    }
+
+    .edge.contradicts {
+      stroke: var(--red);
+      stroke-width: 2.6;
+      marker-end: url(#arrowRed);
+    }
+
+    .edge.derived_from,
+    .edge.similar_to {
+      stroke-dasharray: 7 5;
+    }
+
+    .edge.active,
+    .edge.neighbor {
+      stroke-opacity: 0.95;
+    }
+
+    .node text {
+      fill: var(--text);
+      font-size: 12px;
+      font-weight: 700;
+      pointer-events: none;
+      paint-order: stroke;
+      stroke: var(--panel);
+      stroke-width: 4px;
+      stroke-linejoin: round;
+    }
+
+    .node .ring {
+      fill: var(--panel);
+      stroke: currentColor;
+      stroke-width: 2.4;
+      filter: url(#softShadow);
+    }
+
+    .node .core {
+      fill: currentColor;
+      opacity: 0.18;
+    }
+
+    .node.fact { color: var(--blue); }
+    .node.thesis { color: var(--violet); }
+    .node.excerpt { color: var(--amber); }
+    .node.concept { color: var(--green); }
+    .node.definition { color: var(--cyan); }
+    .node.question { color: var(--red); }
+    .node.source { color: var(--muted); }
+
+    .node.dim {
+      opacity: 0.24;
+    }
+
+    .node.selected .ring {
+      stroke-width: 4;
+      filter: url(#selectedShadow);
+    }
+
+    .node.neighbor .ring {
+      stroke-width: 3;
+    }
+
+    .node {
+      cursor: pointer;
+    }
+
+    .result-list {
+      display: grid;
+      gap: 8px;
+      max-height: 280px;
+      overflow: auto;
+      padding-right: 2px;
+    }
+
+    .result {
+      display: grid;
+      gap: 6px;
+      width: 100%;
+      min-height: auto;
+      text-align: left;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: var(--surface);
+      padding: 10px;
+    }
+
+    .result.active {
+      border-color: var(--accent);
+      outline: 3px solid rgba(31, 111, 91, 0.12);
+    }
+
+    .source-box,
+    .edge-box {
+      display: grid;
+      gap: 8px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: var(--surface);
+      padding: 10px;
+    }
+
+    .edge-list {
+      display: grid;
+      gap: 8px;
+      max-height: 230px;
+      overflow: auto;
+    }
+
+    .strength {
+      height: 7px;
+      border-radius: 999px;
+      background: var(--panel-muted);
+      overflow: hidden;
+    }
+
+    .strength span {
+      display: block;
+      height: 100%;
+      width: 0%;
+      border-radius: inherit;
+      background: var(--accent);
+      transition: width 0.18s ease;
+    }
+
+    .theme-toggle {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      min-height: 36px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: var(--panel);
+      color: var(--muted);
+      cursor: pointer;
+      font-size: 13px;
+      font-weight: 650;
+      padding: 0 10px;
+    }
+
+    .theme-toggle input {
+      appearance: none;
+      position: relative;
+      width: 34px;
+      height: 20px;
+      margin: 0;
+      border: 1px solid var(--line);
+      border-radius: 999px;
+      background: var(--panel-muted);
+      cursor: pointer;
+    }
+
+    .theme-toggle input::before {
+      content: "";
+      position: absolute;
+      top: 2px;
+      left: 2px;
+      width: 14px;
+      height: 14px;
+      border-radius: 50%;
+      background: var(--panel);
+      box-shadow: 0 1px 4px rgba(20, 30, 45, 0.22);
+      transition: transform 0.16s ease;
+    }
+
+    .theme-toggle input:checked {
+      border-color: var(--accent);
+      background: var(--accent);
+    }
+
+    .theme-toggle input:checked::before {
+      transform: translateX(14px);
+    }
+
+    .empty-state {
+      position: absolute;
+      z-index: 3;
+      left: 50%;
+      top: 50%;
+      display: none;
+      width: min(480px, calc(100% - 40px));
+      transform: translate(-50%, -50%);
+      border: 1px dashed var(--line);
+      border-radius: 8px;
+      background: color-mix(in srgb, var(--panel) 94%, transparent);
+      padding: 18px;
+      text-align: center;
+      box-shadow: var(--shadow);
+    }
+
+    .empty-state.visible {
+      display: grid;
+      gap: 10px;
+    }
+
+    @media (max-width: 1180px) {
+      .shell {
+        grid-template-columns: 1fr;
+      }
+
+      .sidebar,
+      .inspector,
+      .graph-stage {
+        min-height: auto;
+      }
+
+      .graph-stage {
+        min-height: 720px;
+      }
+    }
+
+    @media (max-width: 680px) {
+      .shell {
+        width: min(100% - 20px, 720px);
+        padding-top: 12px;
+      }
+
+      header,
+      .toolbar {
+        align-items: stretch;
+        flex-direction: column;
+      }
+
+      button,
+      input,
+      select,
+      .theme-toggle {
+        width: 100%;
+      }
+
+      .view-tabs {
+        grid-template-columns: 1fr;
+      }
+
+      .graph-stage {
+        min-height: 620px;
+      }
+
+      .graph-tools {
+        align-items: stretch;
+        flex-direction: column;
+      }
+
+      .graph-status {
+        max-width: 100%;
+      }
+    }
+  </style>
+</head>
+<body>
+  <div class="shell">
+    <header>
+      <h1>Exocortex Graph</h1>
+      <div class="toolbar">
+        <div class="view-tabs" aria-label="Primary mode">
+          <button id="textMode" type="button">Text</button>
+          <button id="splitMode" type="button">Text + Graph</button>
+          <button class="active" type="button">Graph</button>
+        </div>
+        <label class="theme-toggle" title="Toggle dark theme">
+          <input id="themeToggle" type="checkbox" aria-label="Enable dark theme">
+          <span>Dark</span>
+        </label>
+        <button id="openInbox" type="button">Inbox</button>
+        <button id="refreshGraph" class="primary" type="button">Refresh</button>
+      </div>
+    </header>
+
+    <aside class="sidebar" aria-label="Graph controls">
+      <section class="section">
+        <span class="label">Search</span>
+        <input id="searchInput" type="search" placeholder="Find a node" autocomplete="off">
+      </section>
+
+      <section class="section">
+        <span class="label">Overview</span>
+        <div class="metric-row">
+          <div class="metric">
+            <span>Nodes</span>
+            <strong id="nodeCount">0</strong>
+          </div>
+          <div class="metric">
+            <span>Edges</span>
+            <strong id="edgeCount">0</strong>
+          </div>
+        </div>
+        <div class="metric-row">
+          <div class="metric">
+            <span>Visible</span>
+            <strong id="visibleCount">0</strong>
+          </div>
+          <div class="metric">
+            <span>Forgotten</span>
+            <strong id="forgottenCount">0</strong>
+          </div>
+        </div>
+      </section>
+
+      <section class="section">
+        <div class="row">
+          <span class="label">Node types</span>
+          <button id="allTypes" type="button">All</button>
+        </div>
+        <div id="typeFilters" class="chips" aria-label="Node type filters"></div>
+      </section>
+
+      <section class="section">
+        <div class="row">
+          <span class="label">Edge types</span>
+          <button id="allEdges" type="button">All</button>
+        </div>
+        <div id="edgeFilters" class="chips" aria-label="Edge type filters"></div>
+      </section>
+
+      <section class="section">
+        <span class="label">Matches</span>
+        <div id="resultList" class="result-list"></div>
+      </section>
+    </aside>
+
+    <main id="graphStage" class="graph-stage" aria-label="Knowledge graph visualization">
+      <div class="graph-halo"></div>
+      <div class="graph-tools">
+        <div id="graphStatus" class="graph-status">Loading graph...</div>
+        <div class="zoom" aria-label="Zoom controls">
+          <button id="zoomOut" class="icon" type="button" title="Zoom out">-</button>
+          <button id="fitGraph" type="button">Fit</button>
+          <button id="zoomIn" class="icon" type="button" title="Zoom in">+</button>
+        </div>
+      </div>
+      <div id="emptyState" class="empty-state">
+        <h2>No graph nodes yet</h2>
+        <p class="muted">Add excerpts or thoughts from the reader, then come back here to explore the graph.</p>
+        <button id="emptyOpenReader" class="primary" type="button">Open Reader</button>
+      </div>
+      <svg id="graphSvg" role="img" aria-label="Interactive graph">
+        <defs>
+          <filter id="softShadow" x="-50%" y="-50%" width="200%" height="200%">
+            <feDropShadow dx="0" dy="6" stdDeviation="6" flood-color="#101820" flood-opacity="0.16"></feDropShadow>
+          </filter>
+          <filter id="selectedShadow" x="-60%" y="-60%" width="220%" height="220%">
+            <feDropShadow dx="0" dy="8" stdDeviation="8" flood-color="#1f6f5b" flood-opacity="0.28"></feDropShadow>
+          </filter>
+          <marker id="arrowDefault" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="5" markerHeight="5" orient="auto-start-reverse">
+            <path d="M 0 0 L 10 5 L 0 10 z" fill="#94a2b3"></path>
+          </marker>
+          <marker id="arrowGreen" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="5" markerHeight="5" orient="auto-start-reverse">
+            <path d="M 0 0 L 10 5 L 0 10 z" fill="currentColor"></path>
+          </marker>
+          <marker id="arrowRed" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="5" markerHeight="5" orient="auto-start-reverse">
+            <path d="M 0 0 L 10 5 L 0 10 z" fill="currentColor"></path>
+          </marker>
+        </defs>
+        <g id="viewport">
+          <g id="edgeLayer"></g>
+          <g id="nodeLayer"></g>
+        </g>
+      </svg>
+    </main>
+
+    <aside class="inspector" aria-label="Selected node details">
+      <section class="section">
+        <span class="label">Selected node</span>
+        <h2 id="selectedTitle">Select a node</h2>
+        <div class="row">
+          <span id="selectedType" class="badge">none</span>
+          <span id="selectedId" class="muted"></span>
+        </div>
+        <p id="selectedContent" class="muted">Click any node to inspect its content, source and relations.</p>
+      </section>
+
+      <section class="section">
+        <span class="label">Memory strength</span>
+        <div class="strength"><span id="strengthBar"></span></div>
+        <p id="strengthText" class="muted">No node selected.</p>
+      </section>
+
+      <section class="section">
+        <span class="label">Source</span>
+        <div class="source-box">
+          <h3 id="sourceTitle">No source</h3>
+          <p id="sourceText" class="muted">Source text will appear here when the selected node has provenance attached.</p>
+        </div>
+      </section>
+
+      <section class="section">
+        <span class="label">Relations</span>
+        <div id="edgeList" class="edge-list"></div>
+      </section>
+    </aside>
+  </div>
+
+  <script>
+    const THEME_STORAGE_KEY = "exocortex-theme";
+    const NODE_TYPES = ["fact", "thesis", "excerpt", "concept", "definition", "question", "source"];
+    const TYPE_LABELS = {
+      fact: "Fact",
+      thesis: "Thesis",
+      excerpt: "Excerpt",
+      concept: "Concept",
+      definition: "Definition",
+      question: "Question",
+      source: "Source",
+    };
+    const EDGE_LABELS = {
+      related_to: "related_to",
+      contradicts: "contradicts",
+      supports: "supports",
+      example_of: "example_of",
+      part_of: "part_of",
+      derived_from: "derived_from",
+      similar_to: "similar_to",
+    };
+
+    const state = {
+      nodes: [],
+      edges: [],
+      stats: null,
+      activeTypes: new Set(NODE_TYPES),
+      activeEdges: new Set(Object.keys(EDGE_LABELS)),
+      selectedId: null,
+      search: "",
+      width: 900,
+      height: 640,
+      scale: 1,
+      tx: 0,
+      ty: 0,
+      draggingNode: null,
+      panning: null,
+      animation: null,
+    };
+
+    const graphStage = document.querySelector("#graphStage");
+    const svg = document.querySelector("#graphSvg");
+    const viewport = document.querySelector("#viewport");
+    const edgeLayer = document.querySelector("#edgeLayer");
+    const nodeLayer = document.querySelector("#nodeLayer");
+    const status = document.querySelector("#graphStatus");
+    const emptyState = document.querySelector("#emptyState");
+    const typeFilters = document.querySelector("#typeFilters");
+    const edgeFilters = document.querySelector("#edgeFilters");
+    const resultList = document.querySelector("#resultList");
+    const searchInput = document.querySelector("#searchInput");
+    const themeToggle = document.querySelector("#themeToggle");
+
+    function escapeHtml(value) {
+      return String(value ?? "")
+        .replaceAll("&", "&amp;")
+        .replaceAll("<", "&lt;")
+        .replaceAll(">", "&gt;")
+        .replaceAll('"', "&quot;")
+        .replaceAll("'", "&#039;");
+    }
+
+    function compactId(value) {
+      return value ? `${value.slice(0, 8)}...` : "";
+    }
+
+    function shorten(value, limit = 44) {
+      const text = String(value || "").replace(/\s+/g, " ").trim();
+      return text.length <= limit ? text : `${text.slice(0, limit - 3)}...`;
+    }
+
+    function applyTheme(theme) {
+      const normalizedTheme = theme === "dark" ? "dark" : "light";
+      document.documentElement.dataset.theme = normalizedTheme;
+      themeToggle.checked = normalizedTheme === "dark";
+      themeToggle.setAttribute(
+        "aria-label",
+        normalizedTheme === "dark" ? "Disable dark theme" : "Enable dark theme"
+      );
+    }
+
+    function loadTheme() {
+      try {
+        return localStorage.getItem(THEME_STORAGE_KEY) || "light";
+      } catch {
+        return "light";
+      }
+    }
+
+    function saveTheme(theme) {
+      try {
+        localStorage.setItem(THEME_STORAGE_KEY, theme);
+      } catch {
+        // Theme persistence is best-effort.
+      }
+    }
+
+    async function requestJson(url) {
+      const response = await fetch(url, { headers: { "Content-Type": "application/json" } });
+      if (!response.ok) {
+        let detail = `${response.status} ${response.statusText}`;
+        try {
+          const payload = await response.json();
+          detail = payload.detail || detail;
+        } catch {
+          // Keep HTTP fallback.
+        }
+        throw new Error(detail);
+      }
+      return response.json();
+    }
+
+    function setStatus(text, isError = false) {
+      status.textContent = text || "";
+      status.classList.toggle("error", Boolean(isError));
+    }
+
+    function renderFilterChips() {
+      typeFilters.innerHTML = NODE_TYPES.map((type) => (
+        `<span class="chip ${type} ${state.activeTypes.has(type) ? "active" : ""}" data-type="${type}">${TYPE_LABELS[type]}</span>`
+      )).join("");
+
+      edgeFilters.innerHTML = Object.keys(EDGE_LABELS).map((type) => (
+        `<span class="chip ${state.activeEdges.has(type) ? "active" : ""}" data-edge-type="${type}">${EDGE_LABELS[type]}</span>`
+      )).join("");
+    }
+
+    function updateMetrics(visibleNodes, visibleEdges) {
+      document.querySelector("#nodeCount").textContent = state.stats?.total_nodes ?? state.nodes.length;
+      document.querySelector("#edgeCount").textContent = state.stats?.total_edges ?? state.edges.length;
+      document.querySelector("#forgottenCount").textContent = state.stats?.forgotten_nodes_count ?? 0;
+      document.querySelector("#visibleCount").textContent = visibleNodes.length;
+      const hidden = state.nodes.length - visibleNodes.length;
+      const suffix = hidden > 0 ? ` · ${hidden} hidden by filters` : "";
+      setStatus(`${visibleNodes.length} visible nodes · ${visibleEdges.length} visible edges${suffix}`);
+    }
+
+    function normalizeGraph(nodes, edges) {
+      const stageRect = graphStage.getBoundingClientRect();
+      state.width = Math.max(640, stageRect.width);
+      state.height = Math.max(520, stageRect.height);
+      const centerX = state.width / 2;
+      const centerY = state.height / 2;
+      const radius = Math.min(state.width, state.height) * 0.34;
+
+      const degree = new Map();
+      edges.forEach((edge) => {
+        degree.set(edge.source_id, (degree.get(edge.source_id) || 0) + 1);
+        degree.set(edge.target_id, (degree.get(edge.target_id) || 0) + 1);
+      });
+
+      nodes.forEach((node, index) => {
+        const angle = (Math.PI * 2 * index) / Math.max(nodes.length, 1);
+        const layer = 0.72 + ((index % 5) * 0.075);
+        node.x = centerX + Math.cos(angle) * radius * layer;
+        node.y = centerY + Math.sin(angle) * radius * layer;
+        node.vx = 0;
+        node.vy = 0;
+        node.degree = degree.get(node.id) || 0;
+        node.radius = Math.max(18, Math.min(34, 18 + node.degree * 2.4 + Number(node.strength || 0) * 6));
+      });
+    }
+
+    function visibleGraph() {
+      const query = state.search.trim().toLowerCase();
+      const visibleNodes = state.nodes.filter((node) => {
+        if (!state.activeTypes.has(node.node_type)) {
+          return false;
+        }
+        if (!query) {
+          return true;
+        }
+        return `${node.content} ${node.source_text || ""} ${node.metadata?.document_title || ""}`
+          .toLowerCase()
+          .includes(query);
+      });
+      const visibleIds = new Set(visibleNodes.map((node) => node.id));
+      const visibleEdges = state.edges.filter((edge) => (
+        visibleIds.has(edge.source_id)
+        && visibleIds.has(edge.target_id)
+        && state.activeEdges.has(edge.edge_type)
+      ));
+      return { visibleNodes, visibleEdges };
+    }
+
+    function runLayout(nodes, edges, iterations = 150) {
+      if (!nodes.length) {
+        return;
+      }
+      const nodeById = new Map(nodes.map((node) => [node.id, node]));
+      const links = edges
+        .map((edge) => ({ edge, source: nodeById.get(edge.source_id), target: nodeById.get(edge.target_id) }))
+        .filter((link) => link.source && link.target);
+      const centerX = state.width / 2;
+      const centerY = state.height / 2;
+
+      for (let step = 0; step < iterations; step += 1) {
+        for (let i = 0; i < nodes.length; i += 1) {
+          for (let j = i + 1; j < nodes.length; j += 1) {
+            const a = nodes[i];
+            const b = nodes[j];
+            const dx = b.x - a.x || 0.01;
+            const dy = b.y - a.y || 0.01;
+            const distanceSq = Math.max(80, dx * dx + dy * dy);
+            const force = 880 / distanceSq;
+            const fx = dx * force;
+            const fy = dy * force;
+            a.vx -= fx;
+            a.vy -= fy;
+            b.vx += fx;
+            b.vy += fy;
+          }
+        }
+
+        links.forEach(({ edge, source, target }) => {
+          const dx = target.x - source.x;
+          const dy = target.y - source.y;
+          const distance = Math.max(1, Math.hypot(dx, dy));
+          const ideal = edge.edge_type === "contradicts" ? 230 : 155;
+          const force = (distance - ideal) * 0.009 * Math.max(0.35, Number(edge.weight || 1));
+          const fx = (dx / distance) * force;
+          const fy = (dy / distance) * force;
+          source.vx += fx;
+          source.vy += fy;
+          target.vx -= fx;
+          target.vy -= fy;
+        });
+
+        nodes.forEach((node) => {
+          node.vx += (centerX - node.x) * 0.002;
+          node.vy += (centerY - node.y) * 0.002;
+          node.vx *= 0.82;
+          node.vy *= 0.82;
+          if (!node.fixed) {
+            node.x += node.vx;
+            node.y += node.vy;
+          }
+          node.x = Math.max(58, Math.min(state.width - 58, node.x));
+          node.y = Math.max(72, Math.min(state.height - 58, node.y));
+        });
+      }
+    }
+
+    function edgePath(source, target) {
+      const dx = target.x - source.x;
+      const dy = target.y - source.y;
+      const distance = Math.max(1, Math.hypot(dx, dy));
+      const startX = source.x + (dx / distance) * (source.radius + 5);
+      const startY = source.y + (dy / distance) * (source.radius + 5);
+      const endX = target.x - (dx / distance) * (target.radius + 8);
+      const endY = target.y - (dy / distance) * (target.radius + 8);
+      const curve = Math.min(70, distance * 0.18);
+      const normalX = -dy / distance;
+      const normalY = dx / distance;
+      const midX = (startX + endX) / 2 + normalX * curve;
+      const midY = (startY + endY) / 2 + normalY * curve;
+      return `M ${startX} ${startY} Q ${midX} ${midY} ${endX} ${endY}`;
+    }
+
+    function relatedIds(nodeId) {
+      const ids = new Set();
+      state.edges.forEach((edge) => {
+        if (edge.source_id === nodeId) {
+          ids.add(edge.target_id);
+        }
+        if (edge.target_id === nodeId) {
+          ids.add(edge.source_id);
+        }
+      });
+      return ids;
+    }
+
+    function renderGraph() {
+      const { visibleNodes, visibleEdges } = visibleGraph();
+      const visibleNodeById = new Map(visibleNodes.map((node) => [node.id, node]));
+      const selectedNeighbors = state.selectedId ? relatedIds(state.selectedId) : new Set();
+      emptyState.classList.toggle("visible", state.nodes.length === 0);
+      updateMetrics(visibleNodes, visibleEdges);
+
+      edgeLayer.innerHTML = visibleEdges.map((edge) => {
+        const source = visibleNodeById.get(edge.source_id);
+        const target = visibleNodeById.get(edge.target_id);
+        if (!source || !target) {
+          return "";
+        }
+        const isNeighbor = edge.source_id === state.selectedId || edge.target_id === state.selectedId;
+        return `<path class="edge ${escapeHtml(edge.edge_type)} ${isNeighbor ? "neighbor" : ""}" data-edge-id="${escapeHtml(edge.id)}" d="${edgePath(source, target)}"></path>`;
+      }).join("");
+
+      nodeLayer.innerHTML = visibleNodes.map((node) => {
+        const isSelected = node.id === state.selectedId;
+        const isNeighbor = selectedNeighbors.has(node.id);
+        const shouldDim = state.selectedId && !isSelected && !isNeighbor;
+        return `
+          <g class="node ${escapeHtml(node.node_type)} ${isSelected ? "selected" : ""} ${isNeighbor ? "neighbor" : ""} ${shouldDim ? "dim" : ""}"
+             data-node-id="${escapeHtml(node.id)}"
+             transform="translate(${node.x.toFixed(1)} ${node.y.toFixed(1)})">
+            <circle class="ring" r="${node.radius.toFixed(1)}"></circle>
+            <circle class="core" r="${Math.max(8, node.radius * 0.48).toFixed(1)}"></circle>
+            <text x="0" y="${(node.radius + 18).toFixed(1)}" text-anchor="middle">${escapeHtml(shorten(node.content, 28))}</text>
+          </g>
+        `;
+      }).join("");
+
+      renderResults(visibleNodes);
+      renderInspector();
+    }
+
+    function renderResults(nodes) {
+      const results = nodes.slice(0, 18);
+      resultList.innerHTML = results.length
+        ? results.map((node) => `
+          <button class="result ${node.id === state.selectedId ? "active" : ""}" type="button" data-result-id="${escapeHtml(node.id)}">
+            <h3>${escapeHtml(shorten(node.content, 58))}</h3>
+            <p class="muted">${escapeHtml(TYPE_LABELS[node.node_type] || node.node_type)} · ${escapeHtml(compactId(node.id))}</p>
+          </button>
+        `).join("")
+        : '<p class="muted">No visible nodes match the current filters.</p>';
+    }
+
+    function renderInspector() {
+      const node = state.nodes.find((item) => item.id === state.selectedId);
+      const title = document.querySelector("#selectedTitle");
+      const type = document.querySelector("#selectedType");
+      const id = document.querySelector("#selectedId");
+      const content = document.querySelector("#selectedContent");
+      const strengthBar = document.querySelector("#strengthBar");
+      const strengthText = document.querySelector("#strengthText");
+      const sourceTitle = document.querySelector("#sourceTitle");
+      const sourceText = document.querySelector("#sourceText");
+      const edgeList = document.querySelector("#edgeList");
+
+      if (!node) {
+        title.textContent = "Select a node";
+        type.textContent = "none";
+        id.textContent = "";
+        content.textContent = "Click any node to inspect its content, source and relations.";
+        strengthBar.style.width = "0%";
+        strengthText.textContent = "No node selected.";
+        sourceTitle.textContent = "No source";
+        sourceText.textContent = "Source text will appear here when the selected node has provenance attached.";
+        edgeList.innerHTML = '<p class="muted">No node selected.</p>';
+        return;
+      }
+
+      title.textContent = shorten(node.content, 82);
+      type.textContent = node.node_type;
+      id.textContent = compactId(node.id);
+      content.textContent = node.content || "";
+      const strength = Number(node.strength || 0);
+      strengthBar.style.width = `${Math.round(Math.max(0, Math.min(1, strength)) * 100)}%`;
+      strengthText.textContent = `stored strength ${strength.toFixed(2)} · created ${new Date(node.created_at).toLocaleString()}`;
+      sourceTitle.textContent = node.metadata?.document_title || node.metadata?.source_url || node.metadata?.source_type || "Attached source";
+      sourceText.textContent = node.source_text || "This node has no source_text. It may still have provenance in metadata.";
+
+      const nodeById = new Map(state.nodes.map((item) => [item.id, item]));
+      const relations = state.edges
+        .filter((edge) => edge.source_id === node.id || edge.target_id === node.id)
+        .slice(0, 16);
+
+      edgeList.innerHTML = relations.length
+        ? relations.map((edge) => {
+          const otherId = edge.source_id === node.id ? edge.target_id : edge.source_id;
+          const other = nodeById.get(otherId);
+          return `
+            <button class="edge-box" type="button" data-related-id="${escapeHtml(otherId)}">
+              <div class="row">
+                <span class="badge">${escapeHtml(edge.edge_type)}</span>
+                <span class="muted">${Number(edge.weight || 0).toFixed(2)}</span>
+              </div>
+              <h3>${escapeHtml(shorten(other?.content || otherId, 62))}</h3>
+            </button>
+          `;
+        }).join("")
+        : '<p class="muted">This node has no visible relations yet.</p>';
+    }
+
+    function selectNode(nodeId, shouldCenter = false) {
+      if (!state.nodes.some((node) => node.id === nodeId)) {
+        return;
+      }
+      state.selectedId = nodeId;
+      if (shouldCenter) {
+        const node = state.nodes.find((item) => item.id === nodeId);
+        centerOnNode(node);
+      }
+      renderGraph();
+    }
+
+    function applyTransform() {
+      viewport.setAttribute("transform", `translate(${state.tx} ${state.ty}) scale(${state.scale})`);
+    }
+
+    function centerOnNode(node) {
+      if (!node) {
+        return;
+      }
+      state.tx = (state.width / 2) - (node.x * state.scale);
+      state.ty = (state.height / 2) - (node.y * state.scale);
+      applyTransform();
+    }
+
+    function fitGraph() {
+      const { visibleNodes } = visibleGraph();
+      if (!visibleNodes.length) {
+        state.scale = 1;
+        state.tx = 0;
+        state.ty = 0;
+        applyTransform();
+        return;
+      }
+      const minX = Math.min(...visibleNodes.map((node) => node.x - node.radius));
+      const maxX = Math.max(...visibleNodes.map((node) => node.x + node.radius));
+      const minY = Math.min(...visibleNodes.map((node) => node.y - node.radius));
+      const maxY = Math.max(...visibleNodes.map((node) => node.y + node.radius + 28));
+      const graphWidth = Math.max(1, maxX - minX);
+      const graphHeight = Math.max(1, maxY - minY);
+      state.scale = Math.max(0.42, Math.min(1.55, Math.min((state.width - 90) / graphWidth, (state.height - 120) / graphHeight)));
+      state.tx = (state.width - graphWidth * state.scale) / 2 - minX * state.scale;
+      state.ty = (state.height - graphHeight * state.scale) / 2 - minY * state.scale + 22;
+      applyTransform();
+    }
+
+    function rerenderWithLayout() {
+      const { visibleNodes, visibleEdges } = visibleGraph();
+      runLayout(visibleNodes, visibleEdges, 110);
+      renderGraph();
+    }
+
+    function graphPoint(event) {
+      const rect = svg.getBoundingClientRect();
+      return {
+        x: (event.clientX - rect.left - state.tx) / state.scale,
+        y: (event.clientY - rect.top - state.ty) / state.scale,
+      };
+    }
+
+    function setupEvents() {
+      typeFilters.addEventListener("click", (event) => {
+        const chip = event.target.closest("[data-type]");
+        if (!chip) {
+          return;
+        }
+        const type = chip.dataset.type;
+        if (state.activeTypes.has(type)) {
+          state.activeTypes.delete(type);
+        } else {
+          state.activeTypes.add(type);
+        }
+        renderFilterChips();
+        rerenderWithLayout();
+      });
+
+      edgeFilters.addEventListener("click", (event) => {
+        const chip = event.target.closest("[data-edge-type]");
+        if (!chip) {
+          return;
+        }
+        const type = chip.dataset.edgeType;
+        if (state.activeEdges.has(type)) {
+          state.activeEdges.delete(type);
+        } else {
+          state.activeEdges.add(type);
+        }
+        renderFilterChips();
+        rerenderWithLayout();
+      });
+
+      document.querySelector("#allTypes").addEventListener("click", () => {
+        state.activeTypes = new Set(NODE_TYPES);
+        renderFilterChips();
+        rerenderWithLayout();
+      });
+
+      document.querySelector("#allEdges").addEventListener("click", () => {
+        state.activeEdges = new Set(Object.keys(EDGE_LABELS));
+        renderFilterChips();
+        rerenderWithLayout();
+      });
+
+      searchInput.addEventListener("input", () => {
+        state.search = searchInput.value;
+        rerenderWithLayout();
+      });
+
+      nodeLayer.addEventListener("pointerdown", (event) => {
+        const group = event.target.closest("[data-node-id]");
+        if (!group) {
+          return;
+        }
+        const node = state.nodes.find((item) => item.id === group.dataset.nodeId);
+        if (!node) {
+          return;
+        }
+        event.preventDefault();
+        selectNode(node.id);
+        state.draggingNode = {
+          node,
+          pointerId: event.pointerId,
+        };
+        node.fixed = true;
+        group.setPointerCapture(event.pointerId);
+      });
+
+      nodeLayer.addEventListener("pointermove", (event) => {
+        if (!state.draggingNode || state.draggingNode.pointerId !== event.pointerId) {
+          return;
+        }
+        const point = graphPoint(event);
+        state.draggingNode.node.x = point.x;
+        state.draggingNode.node.y = point.y;
+        renderGraph();
+      });
+
+      nodeLayer.addEventListener("pointerup", (event) => {
+        if (!state.draggingNode || state.draggingNode.pointerId !== event.pointerId) {
+          return;
+        }
+        state.draggingNode.node.fixed = false;
+        state.draggingNode = null;
+      });
+
+      svg.addEventListener("pointerdown", (event) => {
+        if (event.target.closest("[data-node-id]")) {
+          return;
+        }
+        state.panning = {
+          pointerId: event.pointerId,
+          x: event.clientX,
+          y: event.clientY,
+          tx: state.tx,
+          ty: state.ty,
+        };
+        svg.setPointerCapture(event.pointerId);
+      });
+
+      svg.addEventListener("pointermove", (event) => {
+        if (!state.panning || state.panning.pointerId !== event.pointerId) {
+          return;
+        }
+        state.tx = state.panning.tx + event.clientX - state.panning.x;
+        state.ty = state.panning.ty + event.clientY - state.panning.y;
+        applyTransform();
+      });
+
+      svg.addEventListener("pointerup", (event) => {
+        if (state.panning && state.panning.pointerId === event.pointerId) {
+          state.panning = null;
+        }
+      });
+
+      svg.addEventListener("wheel", (event) => {
+        event.preventDefault();
+        const rect = svg.getBoundingClientRect();
+        const mouseX = event.clientX - rect.left;
+        const mouseY = event.clientY - rect.top;
+        const beforeX = (mouseX - state.tx) / state.scale;
+        const beforeY = (mouseY - state.ty) / state.scale;
+        const factor = event.deltaY < 0 ? 1.12 : 0.88;
+        state.scale = Math.max(0.32, Math.min(2.4, state.scale * factor));
+        state.tx = mouseX - beforeX * state.scale;
+        state.ty = mouseY - beforeY * state.scale;
+        applyTransform();
+      }, { passive: false });
+
+      resultList.addEventListener("click", (event) => {
+        const result = event.target.closest("[data-result-id]");
+        if (result) {
+          selectNode(result.dataset.resultId, true);
+        }
+      });
+
+      document.querySelector("#edgeList").addEventListener("click", (event) => {
+        const related = event.target.closest("[data-related-id]");
+        if (related) {
+          selectNode(related.dataset.relatedId, true);
+        }
+      });
+
+      document.querySelector("#zoomIn").addEventListener("click", () => {
+        state.scale = Math.min(2.4, state.scale * 1.18);
+        applyTransform();
+      });
+
+      document.querySelector("#zoomOut").addEventListener("click", () => {
+        state.scale = Math.max(0.32, state.scale * 0.84);
+        applyTransform();
+      });
+
+      document.querySelector("#fitGraph").addEventListener("click", fitGraph);
+      document.querySelector("#refreshGraph").addEventListener("click", loadGraph);
+      document.querySelector("#openInbox").addEventListener("click", () => {
+        window.location.href = "/app";
+      });
+      document.querySelector("#textMode").addEventListener("click", () => {
+        window.location.href = "/reader";
+      });
+      document.querySelector("#splitMode").addEventListener("click", () => {
+        window.location.href = "/reader";
+      });
+      document.querySelector("#emptyOpenReader").addEventListener("click", () => {
+        window.location.href = "/reader";
+      });
+      themeToggle.addEventListener("change", () => {
+        const theme = themeToggle.checked ? "dark" : "light";
+        saveTheme(theme);
+        applyTheme(theme);
+      });
+
+      window.addEventListener("resize", () => {
+        normalizeGraph(state.nodes, state.edges);
+        rerenderWithLayout();
+        fitGraph();
+      });
+    }
+
+    async function loadGraph() {
+      setStatus("Loading graph...");
+      status.classList.remove("error");
+      try {
+        const [nodePayload, edgePayload, stats] = await Promise.all([
+          requestJson("/api/nodes?limit=500"),
+          requestJson("/api/edges?limit=1000"),
+          requestJson("/api/stats"),
+        ]);
+        state.nodes = (nodePayload.nodes || []).map((node) => ({ ...node }));
+        state.edges = (edgePayload.edges || []).map((edge) => ({ ...edge }));
+        state.stats = stats;
+        normalizeGraph(state.nodes, state.edges);
+        rerenderWithLayout();
+        fitGraph();
+      } catch (error) {
+        setStatus(error.message, true);
+      }
+    }
+
+    renderFilterChips();
+    setupEvents();
+    applyTheme(loadTheme());
+    loadGraph();
+  </script>
+</body>
+</html>
