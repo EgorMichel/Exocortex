@@ -12,13 +12,13 @@ from typing import List, Dict, Any, Optional, Tuple
 from pydantic import BaseModel, Field, ValidationError
 import os
 
-from app.core.models import Node, Edge, NodeType, EdgeType, KnowledgeFragment
+from app.core.models import Edge, EdgeType, KnowledgeFragment, Node, NodeType, Origin, ReviewStatus, TrustStatus
 
 
 class ExtractedEntity(BaseModel):
     """Сущность, извлечённая из текста."""
     name: str = Field(description="Название сущности")
-    type: str = Field(description="Тип сущности: fact, concept, thesis, definition, question")
+    type: str = Field(description="Тип сущности: idea, fact, quote, question, conclusion, source")
     description: str = Field(description="Описание или содержание сущности")
     confidence: float = Field(default=1.0, description="Уверенность в извлечении (0-1)")
 
@@ -27,7 +27,7 @@ class ExtractedRelation(BaseModel):
     """Связь между сущностями."""
     source: str = Field(description="Название исходной сущности")
     target: str = Field(description="Название целевой сущности")
-    type: str = Field(description="Тип связи: related_to, contradicts, supports, example_of, part_of, derived_from, similar_to")
+    type: str = Field(description="Тип связи: used_in, derived_from, contradicts")
     description: str = Field(default="", description="Описание связи")
     confidence: float = Field(default=1.0, description="Уверенность в связи (0-1)")
 
@@ -104,8 +104,8 @@ class LLMService:
         """Создать промпт для извлечения сущностей и связей."""
         return f"""
 You are a knowledge extraction assistant. Analyze the following text and extract:
-1. Key entities (facts, concepts, theses, definitions, questions)
-2. Relationships between these entities
+1. Key entities (ideas, facts, quotes, questions, conclusions, sources)
+2. Manual logical relationships between these entities
 
 All human-readable JSON values must be written in Russian, regardless of the
 source text language. This includes entity names, entity descriptions, relation
@@ -120,7 +120,7 @@ Extract entities and relationships in JSON format with this exact structure:
     "entities": [
         {{
             "name": "entity name",
-            "type": "fact|concept|thesis|definition|question",
+            "type": "idea|fact|quote|question|conclusion|source",
             "description": "detailed description of the entity",
             "confidence": 0.95
         }}
@@ -129,7 +129,7 @@ Extract entities and relationships in JSON format with this exact structure:
         {{
             "source": "source entity name",
             "target": "target entity name",
-            "type": "related_to|contradicts|supports|example_of|part_of|derived_from|similar_to",
+            "type": "used_in|derived_from|contradicts",
             "description": "description of the relationship",
             "confidence": 0.9
         }}
@@ -139,7 +139,11 @@ Extract entities and relationships in JSON format with this exact structure:
 
 Rules:
 - Extract only meaningful, standalone entities
-- Use precise types for entities and relationships
+- Use only the listed node and relationship enum values
+- Do not use generic relatedness or similarity as a manual relationship
+- Use derived_from only when the source-target direction is clear: source follows from target
+- Use used_in only when one item is explicitly used in another item
+- Use contradicts only for actual contradictions
 - Don't create duplicate entities
 - Only create relationships that are explicitly stated or strongly implied
 - Set confidence based on how clear/certain the information is
@@ -280,7 +284,11 @@ Respond in JSON format only.
                     'source_type': fragment.source_type,
                     'original_name': entity.name,
                     'extraction_confidence': entity.confidence
-                }
+                },
+                trust_status=TrustStatus.SUGGESTED,
+                origin=Origin.LLM,
+                review_status=ReviewStatus.PENDING,
+                title=entity.name,
             )
             
             entity_name_to_id[entity.name] = node.id
@@ -295,7 +303,9 @@ Respond in JSON format only.
             if not source_id or not target_id:
                 continue
             
-            edge_type = EdgeType(relation.type) if relation.type in [t.value for t in EdgeType] else EdgeType.RELATED_TO
+            if relation.type not in [t.value for t in EdgeType]:
+                continue
+            edge_type = EdgeType(relation.type)
             
             edge = Edge(
                 source_id=source_id,
@@ -305,7 +315,10 @@ Respond in JSON format only.
                 metadata={
                     'description': relation.description,
                     'source_fragment': fragment.id
-                }
+                },
+                trust_status=TrustStatus.SUGGESTED,
+                origin=Origin.LLM,
+                review_status=ReviewStatus.PENDING,
             )
             
             edges.append(edge)

@@ -156,7 +156,7 @@ def _cmd_add_manual(args: argparse.Namespace) -> int:
         source_url=args.source_url,
         document_title=args.document_title,
         source_text=args.source_text,
-        node_type=NodeType.THESIS if args.source_text else NodeType.EXCERPT,
+        node_type=NodeType.IDEA if args.source_text else NodeType.QUOTE,
     )
     print(f"Added manual fragment: {fragment.id}")
     print(f"Node created: {node.id}")
@@ -319,7 +319,10 @@ def build_parser() -> argparse.ArgumentParser:
     forgotten_parser.add_argument("--limit", type=int, default=50)
     forgotten_parser.set_defaults(func=_cmd_forgotten)
 
-    clear_parser = subparsers.add_parser("clear", help="Remove persisted graph files")
+    clear_parser = subparsers.add_parser(
+        "clear",
+        help="Remove persisted graph files before starting with the MVP 2 model",
+    )
     clear_parser.set_defaults(func=_cmd_clear)
 
     analyze_parser = subparsers.add_parser("analyze", help="Run the proactive agent once")

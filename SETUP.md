@@ -164,7 +164,7 @@ docker-compose up -d
 - `GET /app` - встроенный web UI для inbox и реакций
 - `GET /reader` - встроенная читалка для ручного сохранения выделенных фрагментов и мыслей с источниками
 - `POST /api/knowledge` - добавить текст и извлечь знания
-- `POST /api/manual-fragments` - сохранить выделенный текст как `excerpt` или мысль с `source_text` как `thesis` без LLM-обработки
+- `POST /api/manual-fragments` - сохранить выделенный текст как `quote` или мысль с `source_text` как `idea` без LLM-обработки
 - `POST /api/sources` - импортировать внешний источник: прямой текст или текстовый URL
 - `GET /api/nodes` - список узлов, фильтр по `node_type` или `search`
 - `GET /api/nodes/{node_id}` - узел по ID
@@ -219,7 +219,7 @@ curl -X POST http://127.0.0.1:8000/api/manual-fragments ^
 ```bash
 curl -X POST http://127.0.0.1:8000/api/manual-fragments ^
   -H "Content-Type: application/json" ^
-  -d "{\"text\":\"Моя мысль по прочитанному.\",\"source_text\":\"Абзац-источник для этой мысли.\",\"node_type\":\"thesis\",\"source_type\":\"reader\",\"document_title\":\"book.md\"}"
+  -d "{\"text\":\"Моя мысль по прочитанному.\",\"source_text\":\"Абзац-источник для этой мысли.\",\"node_type\":\"idea\",\"source_type\":\"reader\",\"document_title\":\"book.md\"}"
 ```
 
 ## Python API
@@ -231,8 +231,8 @@ from app.core.models import Node, NodeType
 repo = GraphRepository("data/graph")
 node = Node(
     content="Machine learning is a subfield of artificial intelligence",
-    node_type=NodeType.CONCEPT,
-    source_text="Source paragraph or note that supports the node.",
+    node_type=NodeType.IDEA,
+    source_text="Source paragraph or note that grounds the node.",
 )
 
 repo.add_node(node)
@@ -301,7 +301,7 @@ Reader UI:
 python -m app.main
 ```
 
-Откройте `http://127.0.0.1:8000/reader`, загрузите UTF-8 текстовый или Markdown-файл. Быстрый сценарий: выделите фрагмент, нажмите правой кнопкой мыши и выберите `Add as Idea`, чтобы перенести его в поле `Idea` справа; затем при необходимости отредактируйте текст и нажмите `Add Idea`, чтобы сохранить мысль как `thesis`. Сценарий для изучения книги: напишите мысль в правой панели, выделите абзац-источник и выберите `Add as Source`, при необходимости отредактируйте источник или скройте его кнопкой `Hide`, затем нажмите `Add Idea`. Читалка отправляет на сервер мысль, источник, имя файла и смещения выделения; LLM при этом не вызывается.
+Откройте `http://127.0.0.1:8000/reader`, загрузите UTF-8 текстовый или Markdown-файл. Быстрый сценарий: выделите фрагмент, нажмите правой кнопкой мыши и выберите `Add as Idea`, чтобы перенести его в поле `Idea` справа; затем при необходимости отредактируйте текст и нажмите `Add Idea`, чтобы сохранить мысль как `idea`. Сценарий для изучения книги: напишите мысль в правой панели, выделите абзац-источник и выберите `Add as Source`, при необходимости отредактируйте источник или скройте его кнопкой `Hide`, затем нажмите `Add Idea`. Читалка отправляет на сервер мысль, источник, имя файла и смещения выделения; LLM при этом не вызывается.
 
 ## Добавление текстовых источников
 
@@ -360,7 +360,7 @@ python -m pytest -q                  # Linux/macOS после активации
 - оптимизированный анализ графа: общий подбор похожих пар, кэши terms/embeddings, батчинг LLM-противоречий и пропуск неизменившихся пар
 - генерация и сохранение дайджестов инсайтов
 - inbox инсайтов, реакции пользователя и обновление графа по feedback
-- ручное сохранение выделенных фрагментов как `excerpt` и мыслей с `source_text` как `thesis` через API, CLI и `/reader`
+- ручное сохранение выделенных фрагментов как `quote` и мыслей с `source_text` как `idea` через API, CLI и `/reader`
 - базовая модель интересов и статистика взаимодействий
 - фоновый запуск агента через APScheduler
 - локальные векторные эмбеддинги для семантического сравнения узлов

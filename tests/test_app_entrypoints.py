@@ -236,13 +236,16 @@ def test_api_add_manual_fragment_without_llm(monkeypatch, tmp_path):
     payload = response.json()
     assert payload["nodes_created"] == 1
     assert payload["edges_created"] == 0
-    assert payload["node_type"] == "excerpt"
+    assert payload["node_type"] == "quote"
 
     repo = GraphRepository(storage_path=str(storage_path))
     node = repo.get_node(payload["node_id"])
     assert node is not None
-    assert node.node_type == NodeType.EXCERPT
+    assert node.node_type == NodeType.QUOTE
     assert node.content == "A manually selected excerpt should be stored verbatim."
+    assert node.trust_status.value == "confirmed"
+    assert node.origin.value == "user"
+    assert node.review_status.value == "accepted"
     assert node.metadata["entry_mode"] == "manual_selection"
     assert node.metadata["document_title"] == "notes.md"
     assert repo.get_all_fragments()[0].extracted_nodes == [node.id]
@@ -272,13 +275,13 @@ def test_api_add_manual_thought_with_source_text(monkeypatch, tmp_path):
 
     assert response.status_code == 200
     payload = response.json()
-    assert payload["node_type"] == "thesis"
+    assert payload["node_type"] == "idea"
     assert payload["summary"] == "Capital accumulation can intensify bargaining asymmetry."
 
     repo = GraphRepository(storage_path=str(storage_path))
     node = repo.get_node(payload["node_id"])
     assert node is not None
-    assert node.node_type == NodeType.THESIS
+    assert node.node_type == NodeType.IDEA
     assert node.content == "Capital accumulation can intensify bargaining asymmetry."
     assert node.source_text == "A paragraph from the book about capital and labor bargaining."
     assert repo.get_all_fragments()[0].content == node.source_text
@@ -306,7 +309,7 @@ def test_cli_add_stats_search_and_clear(monkeypatch, tmp_path, capsys):
     assert not storage_path.with_suffix(".fragments.json").exists()
 
 
-def test_cli_add_manual_stores_excerpt(monkeypatch, tmp_path, capsys):
+def test_cli_add_manual_stores_quote(monkeypatch, tmp_path, capsys):
     _disable_llm(monkeypatch)
     storage_path = tmp_path / "cli_manual_graph"
     monkeypatch.setenv("STORAGE_PATH", str(storage_path))
@@ -326,7 +329,7 @@ def test_cli_add_manual_stores_excerpt(monkeypatch, tmp_path, capsys):
     repo = GraphRepository(storage_path=str(storage_path))
     nodes = repo.get_all_nodes()
     assert len(nodes) == 1
-    assert nodes[0].node_type == NodeType.EXCERPT
+    assert nodes[0].node_type == NodeType.QUOTE
     assert nodes[0].content == "Manual graph excerpt."
 
 
@@ -346,7 +349,7 @@ def test_cli_add_manual_stores_thought_source(monkeypatch, tmp_path, capsys):
     repo = GraphRepository(storage_path=str(storage_path))
     nodes = repo.get_all_nodes()
     assert len(nodes) == 1
-    assert nodes[0].node_type == NodeType.THESIS
+    assert nodes[0].node_type == NodeType.IDEA
     assert nodes[0].content == "Manual graph thought."
     assert nodes[0].source_text == "Manual source excerpt."
 
@@ -394,7 +397,7 @@ def test_cli_add_manual_stdin_interactive_finishes_on_enter(monkeypatch, tmp_pat
     repo = GraphRepository(storage_path=str(storage_path))
     nodes = repo.get_all_nodes()
     assert len(nodes) == 1
-    assert nodes[0].node_type == NodeType.EXCERPT
+    assert nodes[0].node_type == NodeType.QUOTE
     assert nodes[0].content == "Manual stdin excerpt."
 
 
@@ -404,7 +407,7 @@ def test_cli_analyze_and_digest(monkeypatch, tmp_path, capsys):
     monkeypatch.setenv("STORAGE_PATH", str(storage_path))
 
     repo = GraphRepository(storage_path=str(storage_path))
-    node = Node(content="This old concept should return in a digest.", decay_rate=0.2)
+    node = Node(content="This old idea should return in a digest.", decay_rate=0.2)
     node.last_interacted = utc_now() - timedelta(days=30)
     repo.add_node(node)
     repo.save()

@@ -36,7 +36,7 @@ def test_hidden_connections_skip_existing_edges(tmp_path):
     repo.add_node(first)
     repo.add_node(second)
     repo.add_node(third)
-    repo.add_edge(Edge(source_id=first.id, target_id=second.id, edge_type=EdgeType.RELATED_TO))
+    repo.add_edge(Edge(source_id=first.id, target_id=second.id, edge_type=EdgeType.USED_IN))
 
     agent = ProactiveAgent(
         repo,
@@ -75,12 +75,12 @@ def test_contradiction_detection_uses_llm_service(tmp_path):
     repo = GraphRepository(storage_path=str(tmp_path / "graph"))
     first = Node(
         content="Coffee improves sleep quality.",
-        node_type=NodeType.THESIS,
+        node_type=NodeType.FACT,
         metadata={"topic": "coffee sleep"},
     )
     second = Node(
         content="Coffee reduces sleep quality.",
-        node_type=NodeType.THESIS,
+        node_type=NodeType.FACT,
         metadata={"topic": "coffee sleep"},
     )
     repo.add_node(first)
@@ -112,9 +112,9 @@ def test_contradiction_detection_uses_llm_service(tmp_path):
 def test_contradiction_detection_batches_openai_compatible_client(tmp_path):
     repo = GraphRepository(storage_path=str(tmp_path / "graph"))
     nodes = [
-        Node(content="Coffee improves sleep quality.", node_type=NodeType.THESIS, metadata={"topic": "coffee sleep"}),
-        Node(content="Coffee reduces sleep quality.", node_type=NodeType.THESIS, metadata={"topic": "coffee sleep"}),
-        Node(content="Coffee affects sleep quality.", node_type=NodeType.THESIS, metadata={"topic": "coffee sleep"}),
+        Node(content="Coffee improves sleep quality.", node_type=NodeType.FACT, metadata={"topic": "coffee sleep"}),
+        Node(content="Coffee reduces sleep quality.", node_type=NodeType.FACT, metadata={"topic": "coffee sleep"}),
+        Node(content="Coffee affects sleep quality.", node_type=NodeType.FACT, metadata={"topic": "coffee sleep"}),
     ]
     for node in nodes:
         repo.add_node(node)
@@ -208,12 +208,12 @@ def test_analyze_reuses_candidate_pairs_for_hidden_connections_and_contradiction
     repo = GraphRepository(storage_path=str(tmp_path / "graph"))
     first = Node(
         content="Coffee improves sleep quality.",
-        node_type=NodeType.THESIS,
+        node_type=NodeType.FACT,
         metadata={"topic": "coffee sleep"},
     )
     second = Node(
         content="Coffee reduces sleep quality.",
-        node_type=NodeType.THESIS,
+        node_type=NodeType.FACT,
         metadata={"topic": "coffee sleep"},
     )
     repo.add_node(first)
@@ -496,7 +496,7 @@ def test_insight_store_round_trips_digest(tmp_path):
     assert latest.insights[0].node_ids == ["a", "b"]
 
 
-def test_personalization_confirm_connection_updates_graph(tmp_path):
+def test_personalization_confirm_connection_records_review_without_edge(tmp_path):
     repo = GraphRepository(storage_path=str(tmp_path / "graph"))
     first = Node(content="Python helps automate data workflows.", metadata={"topic": "python data"})
     second = Node(content="Automation improves data processing.", metadata={"topic": "python data"})
@@ -517,10 +517,11 @@ def test_personalization_confirm_connection_updates_graph(tmp_path):
     feedback = service.react_to_insight(insight.id, FeedbackAction.CONFIRM)
 
     edges = repo.get_edges_between(first.id, second.id)
+    updated_first = repo.get_node(first.id)
     assert feedback.action == FeedbackAction.CONFIRM
-    assert edges
-    assert edges[0].edge_type == EdgeType.RELATED_TO
-    assert edges[0].metadata["source"] == "user_feedback"
+    assert edges == []
+    assert "manual_edge_not_created:missing_edge_type" in feedback.effects
+    assert updated_first.metadata["pending_connection_review"]["insight_id"] == insight.id
 
 
 def test_personalization_reminder_useful_refreshes_node_and_profile(tmp_path):

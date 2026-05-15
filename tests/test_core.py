@@ -10,7 +10,16 @@
 
 import pytest
 from datetime import datetime, timedelta, timezone
-from app.core.models import Node, Edge, NodeType, EdgeType, KnowledgeFragment
+from app.core.models import (
+    Edge,
+    EdgeType,
+    KnowledgeFragment,
+    Node,
+    NodeType,
+    Origin,
+    ReviewStatus,
+    TrustStatus,
+)
 from app.core.repository import GraphRepository
 
 
@@ -31,30 +40,46 @@ class TestNode:
         assert node.strength == 1.0
         assert node.decay_rate == 0.01
         assert node.metadata['source'] == 'manual'
+        assert node.trust_status == TrustStatus.CONFIRMED
+        assert node.origin == Origin.USER
+        assert node.review_status == ReviewStatus.ACCEPTED
+        assert node.tags == []
         assert node.id is not None
     
     def test_create_node_custom_values(self):
         """Создание узла с кастомными параметрами."""
         node = Node(
-            content="Important concept",
-            node_type=NodeType.CONCEPT,
+            content="Important idea",
+            node_type=NodeType.IDEA,
             strength=0.8,
             decay_rate=0.05,
-            metadata={'topic': 'AI', 'difficulty': 'hard'}
+            metadata={'topic': 'AI', 'difficulty': 'hard'},
+            title="AI note",
+            tags=["ai", "thinking"],
+            user_comment="seed",
         )
         
-        assert node.node_type == NodeType.CONCEPT
+        assert node.node_type == NodeType.IDEA
         assert node.strength == 0.8
         assert node.decay_rate == 0.05
         assert node.metadata['topic'] == 'AI'
+        assert node.title == "AI note"
+        assert node.tags == ["ai", "thinking"]
+        assert node.metadata["trust_status"] == "confirmed"
     
     def test_node_serialization(self):
         """Сериализация и десериализация узла."""
         original = Node(
             content="Test content",
-            node_type=NodeType.THESIS,
+            node_type=NodeType.IDEA,
             source_text="Original source paragraph.",
-            strength=0.9
+            strength=0.9,
+            trust_status=TrustStatus.SUGGESTED,
+            origin=Origin.LLM,
+            review_status=ReviewStatus.PENDING,
+            title="Test title",
+            tags=["test"],
+            user_comment="Review me",
         )
         
         serialized = original.to_dict()
@@ -65,6 +90,12 @@ class TestNode:
         assert restored.source_text == original.source_text
         assert restored.node_type == original.node_type
         assert restored.strength == original.strength
+        assert restored.trust_status == TrustStatus.SUGGESTED
+        assert restored.origin == Origin.LLM
+        assert restored.review_status == ReviewStatus.PENDING
+        assert restored.title == "Test title"
+        assert restored.tags == ["test"]
+        assert restored.user_comment == "Review me"
     
     def test_node_interact_increases_strength(self):
         """Взаимодействие увеличивает силу памяти."""
@@ -126,8 +157,11 @@ class TestEdge:
         
         assert edge.source_id == "node1"
         assert edge.target_id == "node2"
-        assert edge.edge_type == EdgeType.RELATED_TO
+        assert edge.edge_type == EdgeType.USED_IN
         assert edge.weight == 1.0
+        assert edge.trust_status == TrustStatus.CONFIRMED
+        assert edge.origin == Origin.USER
+        assert edge.review_status == ReviewStatus.ACCEPTED
     
     def test_create_edge_custom_values(self):
         """Создание связи с кастомными параметрами."""
@@ -148,8 +182,12 @@ class TestEdge:
         original = Edge(
             source_id="a",
             target_id="b",
-            edge_type=EdgeType.SUPPORTS,
-            weight=0.8
+            edge_type=EdgeType.DERIVED_FROM,
+            weight=0.8,
+            trust_status=TrustStatus.SUGGESTED,
+            origin=Origin.AGENT,
+            review_status=ReviewStatus.PENDING,
+            user_comment="Check direction",
         )
         
         serialized = original.to_dict()
@@ -159,6 +197,10 @@ class TestEdge:
         assert restored.source_id == original.source_id
         assert restored.edge_type == original.edge_type
         assert restored.weight == original.weight
+        assert restored.trust_status == TrustStatus.SUGGESTED
+        assert restored.origin == Origin.AGENT
+        assert restored.review_status == ReviewStatus.PENDING
+        assert restored.user_comment == "Check direction"
 
 
 class TestKnowledgeFragment:
@@ -272,7 +314,7 @@ class TestGraphRepository:
         """Фильтрация узлов по типу."""
         repo.add_node(Node(content="Fact 1", node_type=NodeType.FACT))
         repo.add_node(Node(content="Fact 2", node_type=NodeType.FACT))
-        repo.add_node(Node(content="Concept 1", node_type=NodeType.CONCEPT))
+        repo.add_node(Node(content="Idea 1", node_type=NodeType.IDEA))
         
         facts = repo.get_nodes_by_type(NodeType.FACT)
         
@@ -297,14 +339,14 @@ class TestGraphRepository:
         repo.add_node(node1)
         repo.add_node(node2)
         
-        edge = Edge(source_id=node1.id, target_id=node2.id, edge_type=EdgeType.SUPPORTS)
+        edge = Edge(source_id=node1.id, target_id=node2.id, edge_type=EdgeType.DERIVED_FROM)
         repo.add_edge(edge)
         
         retrieved = repo.get_edge(edge.id)
         
         assert retrieved is not None
         assert retrieved.source_id == node1.id
-        assert retrieved.edge_type == EdgeType.SUPPORTS
+        assert retrieved.edge_type == EdgeType.DERIVED_FROM
     
     def test_get_edges_between(self, repo):
         """Получение связей между узлами."""
@@ -313,8 +355,8 @@ class TestGraphRepository:
         repo.add_node(node1)
         repo.add_node(node2)
         
-        edge1 = Edge(source_id=node1.id, target_id=node2.id, edge_type=EdgeType.RELATED_TO)
-        edge2 = Edge(source_id=node1.id, target_id=node2.id, edge_type=EdgeType.SIMILAR_TO)
+        edge1 = Edge(source_id=node1.id, target_id=node2.id, edge_type=EdgeType.USED_IN)
+        edge2 = Edge(source_id=node1.id, target_id=node2.id, edge_type=EdgeType.DERIVED_FROM)
         repo.add_edge(edge1)
         repo.add_edge(edge2)
         
@@ -347,7 +389,7 @@ class TestGraphRepository:
         repo.add_node(node3)
         
         repo.add_edge(Edge(source_id=node1.id, target_id=node2.id, edge_type=EdgeType.CONTRADICTS))
-        repo.add_edge(Edge(source_id=node2.id, target_id=node3.id, edge_type=EdgeType.RELATED_TO))
+        repo.add_edge(Edge(source_id=node2.id, target_id=node3.id, edge_type=EdgeType.USED_IN))
         
         contradictions = repo.get_contradictions()
         
@@ -383,7 +425,7 @@ class TestGraphRepository:
         repo.add_node(node1)
         repo.add_node(node2)
         
-        edge = Edge(source_id=node1.id, target_id=node2.id, edge_type=EdgeType.SUPPORTS)
+        edge = Edge(source_id=node1.id, target_id=node2.id, edge_type=EdgeType.USED_IN)
         repo.add_edge(edge)
         
         related = repo.get_related_nodes(node1.id)
@@ -406,7 +448,7 @@ class TestGraphRepository:
     def test_get_stats(self, repo):
         """Получение статистики графа."""
         repo.add_node(Node(content="Fact", node_type=NodeType.FACT))
-        repo.add_node(Node(content="Concept", node_type=NodeType.CONCEPT))
+        repo.add_node(Node(content="Idea", node_type=NodeType.IDEA))
         repo.add_node(Node(content="Another Fact", node_type=NodeType.FACT))
         
         repo.add_edge(Edge(source_id=repo.get_all_nodes()[0].id, target_id=repo.get_all_nodes()[1].id))
@@ -419,7 +461,7 @@ class TestGraphRepository:
         assert stats['total_edges'] == 1
         assert stats['total_fragments'] == 1
         assert stats['node_types']['fact'] == 2
-        assert stats['node_types']['concept'] == 1
+        assert stats['node_types']['idea'] == 1
     
     def test_save_and_load(self, repo):
         """Сохранение и загрузка графа."""

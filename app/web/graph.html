@@ -288,10 +288,9 @@
     }
 
     .chip.fact { color: var(--blue); }
-    .chip.thesis { color: var(--violet); }
-    .chip.excerpt { color: var(--amber); }
-    .chip.concept { color: var(--green); }
-    .chip.definition { color: var(--cyan); }
+    .chip.idea { color: var(--violet); }
+    .chip.quote { color: var(--amber); }
+    .chip.conclusion { color: var(--green); }
     .chip.question { color: var(--red); }
 
     .muted {
@@ -381,7 +380,7 @@
       marker-end: url(#arrowDefault);
     }
 
-    .edge.supports {
+    .edge.used_in {
       stroke: var(--green);
       marker-end: url(#arrowGreen);
     }
@@ -392,8 +391,7 @@
       marker-end: url(#arrowRed);
     }
 
-    .edge.derived_from,
-    .edge.similar_to {
+    .edge.derived_from {
       stroke-dasharray: 7 5;
     }
 
@@ -426,10 +424,9 @@
     }
 
     .node.fact { color: var(--blue); }
-    .node.thesis { color: var(--violet); }
-    .node.excerpt { color: var(--amber); }
-    .node.concept { color: var(--green); }
-    .node.definition { color: var(--cyan); }
+    .node.idea { color: var(--violet); }
+    .node.quote { color: var(--amber); }
+    .node.conclusion { color: var(--green); }
     .node.question { color: var(--red); }
     .node.source { color: var(--muted); }
 
@@ -715,7 +712,7 @@
       </div>
       <div id="emptyState" class="empty-state">
         <h2>No graph nodes yet</h2>
-        <p class="muted">Add excerpts or thoughts from the reader, then come back here to explore the graph.</p>
+        <p class="muted">Add quotes or ideas from the reader, then come back here to explore the graph.</p>
         <button id="emptyOpenReader" class="primary" type="button">Open Reader</button>
       </div>
       <svg id="graphSvg" role="img" aria-label="Interactive graph">
@@ -777,24 +774,19 @@
 
   <script>
     const THEME_STORAGE_KEY = "exocortex-theme";
-    const NODE_TYPES = ["fact", "thesis", "excerpt", "concept", "definition", "question", "source"];
+    const NODE_TYPES = ["idea", "fact", "quote", "question", "conclusion", "source"];
     const TYPE_LABELS = {
+      idea: "Idea",
       fact: "Fact",
-      thesis: "Thesis",
-      excerpt: "Excerpt",
-      concept: "Concept",
-      definition: "Definition",
+      quote: "Quote",
       question: "Question",
+      conclusion: "Conclusion",
       source: "Source",
     };
     const EDGE_LABELS = {
-      related_to: "related_to",
-      contradicts: "contradicts",
-      supports: "supports",
-      example_of: "example_of",
-      part_of: "part_of",
+      used_in: "used_in",
       derived_from: "derived_from",
-      similar_to: "similar_to",
+      contradicts: "contradicts",
     };
 
     const state = {

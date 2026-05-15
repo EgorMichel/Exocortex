@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any, Optional
 
-from app.core.models import KnowledgeFragment, Node, NodeType
+from app.core.models import KnowledgeFragment, Node, NodeType, Origin, ReviewStatus, TrustStatus
 from app.core.repository import GraphRepository
 
 
@@ -15,7 +15,7 @@ def store_manual_fragment(
     source_url: Optional[str] = None,
     document_title: Optional[str] = None,
     source_text: Optional[str] = None,
-    node_type: NodeType = NodeType.EXCERPT,
+    node_type: NodeType = NodeType.QUOTE,
     metadata: Optional[dict[str, Any]] = None,
 ) -> tuple[KnowledgeFragment, Node]:
     """Store a user-selected text fragment as a single graph node."""
@@ -46,6 +46,12 @@ def store_manual_fragment(
         node_type=node_type,
         source_text=source_content,
         metadata=node_metadata,
+        trust_status=TrustStatus.CONFIRMED,
+        origin=Origin.USER,
+        review_status=ReviewStatus.ACCEPTED,
+        user_comment=node_metadata.get("user_comment"),
+        title=node_metadata.get("title") or document_title,
+        tags=node_metadata.get("tags", []),
     )
 
     repository.add_node(node)

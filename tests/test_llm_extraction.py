@@ -69,6 +69,10 @@ class TestLLMExtraction:
         assert "must be written in Russian" in prompt
         assert "source text language" in prompt
         assert "Write all facts, names, descriptions, comments, and summaries in Russian" in prompt
+        assert "idea|fact|quote|question|conclusion|source" in prompt
+        assert "used_in|derived_from|contradicts" in prompt
+        assert "related_to" not in prompt
+        assert "similar_to" not in prompt
 
     def test_extract_knowledge_system_message_requires_russian_output(self):
         class FakeCompletions:
@@ -116,12 +120,12 @@ class TestLLMExtraction:
         entities = [
             ExtractedEntity(
                 name="Искусственный интеллект",
-                type="concept",
+                type="fact",
                 description="Область компьютерных наук, изучающая создание интеллектуальных систем"
             ),
             ExtractedEntity(
                 name="Машинное обучение",
-                type="concept", 
+                type="idea",
                 description="Подраздел искусственного интеллекта"
             )
         ]
@@ -130,8 +134,8 @@ class TestLLMExtraction:
             ExtractedRelation(
                 source="Машинное обучение",
                 target="Искусственный интеллект",
-                type="part_of",
-                description="Машинное обучение является частью ИИ"
+                type="derived_from",
+                description="Мысль о машинном обучении следует из описания ИИ"
             )
         ]
         
@@ -152,11 +156,17 @@ class TestLLMExtraction:
         assert len(edges) == 1
         
         # Проверяем типы узлов
-        assert nodes[0].node_type == NodeType.CONCEPT
-        assert nodes[1].node_type == NodeType.CONCEPT
+        assert nodes[0].node_type == NodeType.FACT
+        assert nodes[1].node_type == NodeType.IDEA
+        assert nodes[0].trust_status.value == "suggested"
+        assert nodes[0].origin.value == "llm"
+        assert nodes[0].review_status.value == "pending"
         
         # Проверяем тип связи
-        assert edges[0].edge_type == EdgeType.PART_OF
+        assert edges[0].edge_type == EdgeType.DERIVED_FROM
+        assert edges[0].trust_status.value == "suggested"
+        assert edges[0].origin.value == "llm"
+        assert edges[0].review_status.value == "pending"
         
         # Проверяем метаданные
         assert 'source' in nodes[0].metadata
@@ -171,7 +181,7 @@ class TestLLMExtraction:
                 {"": ""},
                 {
                     "name": "Python",
-                    "type": "concept",
+                    "type": "fact",
                     "description": "A programming language",
                     "confidence": 0.9,
                 },
@@ -181,7 +191,7 @@ class TestLLMExtraction:
                 {
                     "source": "Python",
                     "target": "Data analysis",
-                    "type": "related_to",
+                    "type": "used_in",
                     "description": "Python is used for data analysis",
                     "confidence": 0.8,
                 },
@@ -244,7 +254,7 @@ class TestLLMExtraction:
                     entities=[
                         ExtractedEntity(
                             name="Python",
-                            type="concept",
+                            type="fact",
                             description="Python is a programming language",
                         )
                     ],

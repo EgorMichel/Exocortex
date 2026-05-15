@@ -18,7 +18,7 @@ from app.agents.insights import Digest, Insight
 from app.agents.proactive import AgentSettings, ProactiveAgent
 from app.agents.scheduler import build_agent_scheduler
 from app.config import load_settings
-from app.core.models import NodeType
+from app.core.models import EdgeType, NodeType
 from app.core.repository import GraphRepository
 from app.llm.extraction import extract_and_store, LLMService
 from app.services.external_sources import ExternalSourceIngestor
@@ -80,6 +80,12 @@ class NodeResponse(BaseModel):
     strength: float
     created_at: str
     metadata: Dict[str, Any]
+    trust_status: str
+    origin: str
+    review_status: str
+    user_comment: Optional[str] = None
+    title: Optional[str] = None
+    tags: List[str]
 
 
 class EdgeResponse(BaseModel):
@@ -90,6 +96,10 @@ class EdgeResponse(BaseModel):
     edge_type: str
     weight: float
     metadata: Dict[str, Any]
+    trust_status: str
+    origin: str
+    review_status: str
+    user_comment: Optional[str] = None
 
 
 class GraphStatsResponse(BaseModel):
@@ -425,7 +435,7 @@ async def add_manual_fragment(request: ManualFragmentRequest):
     try:
         has_source_text = bool(request.source_text and request.source_text.strip())
         node_type = NodeType(request.node_type) if request.node_type else (
-            NodeType.THESIS if has_source_text else NodeType.EXCERPT
+            NodeType.IDEA if has_source_text else NodeType.QUOTE
         )
         fragment, node = store_manual_fragment(
             repository=get_repository(),
@@ -487,7 +497,13 @@ async def get_nodes(
                 source_text=n.source_text,
                 strength=n.strength,
                 created_at=n.created_at.isoformat(),
-                metadata=n.metadata
+                metadata=n.metadata,
+                trust_status=n.trust_status.value,
+                origin=n.origin.value,
+                review_status=n.review_status.value,
+                user_comment=n.user_comment,
+                title=n.title,
+                tags=n.tags,
             )
             for n in nodes
         ],
@@ -511,7 +527,13 @@ async def get_node(node_id: str):
         source_text=node.source_text,
         strength=node.strength,
         created_at=node.created_at.isoformat(),
-        metadata=node.metadata
+        metadata=node.metadata,
+        trust_status=node.trust_status.value,
+        origin=node.origin.value,
+        review_status=node.review_status.value,
+        user_comment=node.user_comment,
+        title=node.title,
+        tags=node.tags,
     )
 
 
@@ -527,8 +549,15 @@ async def get_edges(
     """
     repository = get_repository()
     
-    if edge_type == "contradicts":
-        edges = repository.get_contradictions()[:limit]
+    if edge_type:
+        try:
+            edge_type_enum = EdgeType(edge_type)
+        except ValueError:
+            raise HTTPException(status_code=400, detail=f"Invalid edge_type: {edge_type}")
+        edges = [
+            edge for edge in repository.get_all_edges()
+            if edge.edge_type == edge_type_enum
+        ][:limit]
     else:
         edges = repository.get_all_edges()[:limit]
     
@@ -540,7 +569,11 @@ async def get_edges(
                 target_id=e.target_id,
                 edge_type=e.edge_type.value,
                 weight=e.weight,
-                metadata=e.metadata
+                metadata=e.metadata,
+                trust_status=e.trust_status.value,
+                origin=e.origin.value,
+                review_status=e.review_status.value,
+                user_comment=e.user_comment,
             )
             for e in edges
         ],
@@ -567,7 +600,13 @@ async def get_node_neighbors(node_id: str, radius: int = 1):
                 source_text=n.source_text,
                 strength=n.strength,
                 created_at=n.created_at.isoformat(),
-                metadata=n.metadata
+                metadata=n.metadata,
+                trust_status=n.trust_status.value,
+                origin=n.origin.value,
+                review_status=n.review_status.value,
+                user_comment=n.user_comment,
+                title=n.title,
+                tags=n.tags,
             )
             for n in neighbors
         ],

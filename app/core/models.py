@@ -2,8 +2,8 @@
 Модели данных для графа знаний Exocortex.
 
 Основные сущности:
-- Node: узел графа (факт, концепция, тезис)
-- Edge: связь между узлами
+- Node: узел графа MVP 2
+- Edge: ручная логическая связь между узлами
 """
 
 from dataclasses import dataclass, field
@@ -21,24 +21,44 @@ def utc_now() -> datetime:
 
 class NodeType(Enum):
     """Типы узлов графа знаний."""
-    FACT = "fact"           # Конкретный факт
-    EXCERPT = "excerpt"     # Фрагмент, вручную выделенный пользователем
-    CONCEPT = "concept"     # Абстрактная концепция
-    THESIS = "thesis"       # Тезис/утверждение
-    DEFINITION = "definition"  # Определение термина
-    QUESTION = "question"   # Вопрос
-    SOURCE = "source"       # Источник информации
+    IDEA = "idea"               # Собственная мысль пользователя
+    FACT = "fact"               # Утверждение о мире
+    QUOTE = "quote"             # Цитата или выделенный фрагмент
+    QUESTION = "question"       # Открытый вопрос
+    CONCLUSION = "conclusion"   # Вывод
+    SOURCE = "source"           # Источник информации
 
 
 class EdgeType(Enum):
     """Типы связей между узлами."""
-    RELATED_TO = "related_to"       # Общая связь
+    USED_IN = "used_in"             # Используется в
+    DERIVED_FROM = "derived_from"   # Следует из / является следствием
     CONTRADICTS = "contradicts"     # Противоречит
-    SUPPORTS = "supports"           # Подтверждает
-    EXAMPLE_OF = "example_of"       # Является примером
-    PART_OF = "part_of"             # Является частью
-    DERIVED_FROM = "derived_from"   # Выведено из
-    SIMILAR_TO = "similar_to"       # Похоже на
+
+
+class TrustStatus(Enum):
+    """Статусы доверия для узлов и связей."""
+    CONFIRMED = "confirmed"
+    SUGGESTED = "suggested"
+    AUTO_INFERRED = "auto_inferred"
+    CONFLICT = "conflict"
+    NEEDS_CLARIFICATION = "needs_clarification"
+
+
+class Origin(Enum):
+    """Источник появления узла или связи."""
+    USER = "user"
+    LLM = "llm"
+    AGENT = "agent"
+    SYSTEM = "system"
+
+
+class ReviewStatus(Enum):
+    """Статус пользовательской проверки."""
+    PENDING = "pending"
+    ACCEPTED = "accepted"
+    REJECTED = "rejected"
+    EDITED = "edited"
 
 
 @dataclass
@@ -63,6 +83,12 @@ class Node:
     id: str = field(default_factory=lambda: str(uuid.uuid4()))
     source_text: Optional[str] = None
     metadata: Dict[str, Any] = field(default_factory=dict)
+    trust_status: TrustStatus = TrustStatus.CONFIRMED
+    origin: Origin = Origin.USER
+    review_status: ReviewStatus = ReviewStatus.ACCEPTED
+    user_comment: Optional[str] = None
+    title: Optional[str] = None
+    tags: list[str] = field(default_factory=list)
     strength: float = 1.0
     decay_rate: float = 0.01  # 1% в день по умолчанию
     last_interacted: datetime = field(default_factory=utc_now)
@@ -70,19 +96,56 @@ class Node:
     embeddings: Optional[list[float]] = None
     
     def __post_init__(self):
+        if self.trust_status == TrustStatus.CONFIRMED and self.metadata.get('trust_status'):
+            self.trust_status = self.metadata['trust_status']
+        if self.origin == Origin.USER and self.metadata.get('origin'):
+            self.origin = self.metadata['origin']
+        if self.review_status == ReviewStatus.ACCEPTED and self.metadata.get('review_status'):
+            self.review_status = self.metadata['review_status']
+        if self.user_comment is None and self.metadata.get('user_comment'):
+            self.user_comment = self.metadata['user_comment']
+        if self.title is None and self.metadata.get('title'):
+            self.title = self.metadata['title']
+        if not self.tags and self.metadata.get('tags'):
+            self.tags = self.metadata['tags']
         if isinstance(self.node_type, str):
             self.node_type = NodeType(self.node_type)
-        if not self.metadata.get('source'):
-            self.metadata['source'] = 'manual'
+        if isinstance(self.trust_status, str):
+            self.trust_status = TrustStatus(self.trust_status)
+        if isinstance(self.origin, str):
+            self.origin = Origin(self.origin)
+        if isinstance(self.review_status, str):
+            self.review_status = ReviewStatus(self.review_status)
+        if isinstance(self.tags, str):
+            self.tags = [self.tags]
+        self.tags = [str(tag) for tag in self.tags]
+        self._sync_standard_metadata()
+
+    def _sync_standard_metadata(self) -> None:
+        """Keep standard MVP 2 metadata keys available for older callers."""
+        self.metadata.setdefault('source', 'manual')
+        self.metadata['trust_status'] = self.trust_status.value
+        self.metadata['origin'] = self.origin.value
+        self.metadata['review_status'] = self.review_status.value
+        self.metadata['user_comment'] = self.user_comment
+        self.metadata['title'] = self.title
+        self.metadata['tags'] = self.tags
     
     def to_dict(self) -> Dict[str, Any]:
         """Сериализация узла в словарь."""
+        self._sync_standard_metadata()
         return {
             'id': self.id,
             'node_type': self.node_type.value,
             'content': self.content,
             'source_text': self.source_text or '',
             'metadata': json.dumps(self.metadata),  # Сериализуем dict как JSON string
+            'trust_status': self.trust_status.value,
+            'origin': self.origin.value,
+            'review_status': self.review_status.value,
+            'user_comment': self.user_comment or '',
+            'title': self.title or '',
+            'tags': json.dumps(self.tags),
             'strength': self.strength,
             'decay_rate': self.decay_rate,
             'last_interacted': self.last_interacted.isoformat(),
@@ -99,7 +162,16 @@ class Node:
 
         data['source_text'] = data.get('source_text') or None
         data['node_type'] = NodeType(data['node_type'])
-        data['metadata'] = json.loads(data['metadata']) if isinstance(data.get('metadata'), str) else data['metadata']
+        data['metadata'] = json.loads(data['metadata']) if isinstance(data.get('metadata'), str) else data.get('metadata', {})
+        data['trust_status'] = TrustStatus(data.get('trust_status') or data['metadata'].get('trust_status') or TrustStatus.CONFIRMED.value)
+        data['origin'] = Origin(data.get('origin') or data['metadata'].get('origin') or Origin.USER.value)
+        data['review_status'] = ReviewStatus(data.get('review_status') or data['metadata'].get('review_status') or ReviewStatus.ACCEPTED.value)
+        data['user_comment'] = data.get('user_comment') or data['metadata'].get('user_comment') or None
+        data['title'] = data.get('title') or data['metadata'].get('title') or None
+        tags_data = data.get('tags', data['metadata'].get('tags', []))
+        if isinstance(tags_data, str):
+            tags_data = json.loads(tags_data) if tags_data else []
+        data['tags'] = tags_data if isinstance(tags_data, list) else []
         embeddings_data = data.get('embeddings')
         data['embeddings'] = json.loads(embeddings_data) if isinstance(embeddings_data, str) and embeddings_data != '[]' else None
         data['last_interacted'] = datetime.fromisoformat(data['last_interacted'])
@@ -147,18 +219,45 @@ class Edge:
     """
     source_id: str
     target_id: str
-    edge_type: EdgeType = EdgeType.RELATED_TO
+    edge_type: EdgeType = EdgeType.USED_IN
     weight: float = 1.0
     id: str = field(default_factory=lambda: str(uuid.uuid4()))
     metadata: Dict[str, Any] = field(default_factory=dict)
+    trust_status: TrustStatus = TrustStatus.CONFIRMED
+    origin: Origin = Origin.USER
+    review_status: ReviewStatus = ReviewStatus.ACCEPTED
+    user_comment: Optional[str] = None
     created_at: datetime = field(default_factory=utc_now)
     
     def __post_init__(self):
+        if self.trust_status == TrustStatus.CONFIRMED and self.metadata.get('trust_status'):
+            self.trust_status = self.metadata['trust_status']
+        if self.origin == Origin.USER and self.metadata.get('origin'):
+            self.origin = self.metadata['origin']
+        if self.review_status == ReviewStatus.ACCEPTED and self.metadata.get('review_status'):
+            self.review_status = self.metadata['review_status']
+        if self.user_comment is None and self.metadata.get('user_comment'):
+            self.user_comment = self.metadata['user_comment']
         if isinstance(self.edge_type, str):
             self.edge_type = EdgeType(self.edge_type)
+        if isinstance(self.trust_status, str):
+            self.trust_status = TrustStatus(self.trust_status)
+        if isinstance(self.origin, str):
+            self.origin = Origin(self.origin)
+        if isinstance(self.review_status, str):
+            self.review_status = ReviewStatus(self.review_status)
+        self._sync_standard_metadata()
+
+    def _sync_standard_metadata(self) -> None:
+        """Keep standard MVP 2 metadata keys available for older callers."""
+        self.metadata['trust_status'] = self.trust_status.value
+        self.metadata['origin'] = self.origin.value
+        self.metadata['review_status'] = self.review_status.value
+        self.metadata['user_comment'] = self.user_comment
     
     def to_dict(self) -> Dict[str, Any]:
         """Сериализация связи в словарь."""
+        self._sync_standard_metadata()
         return {
             'id': self.id,
             'source_id': self.source_id,
@@ -166,6 +265,10 @@ class Edge:
             'edge_type': self.edge_type.value,
             'weight': self.weight,
             'metadata': json.dumps(self.metadata),  # Сериализуем dict как JSON string
+            'trust_status': self.trust_status.value,
+            'origin': self.origin.value,
+            'review_status': self.review_status.value,
+            'user_comment': self.user_comment or '',
             'created_at': self.created_at.isoformat()
         }
     
@@ -174,7 +277,11 @@ class Edge:
         """Десериализация связи из словаря."""
         data = data.copy()
         data['edge_type'] = EdgeType(data['edge_type'])
-        data['metadata'] = json.loads(data['metadata']) if isinstance(data.get('metadata'), str) else data['metadata']
+        data['metadata'] = json.loads(data['metadata']) if isinstance(data.get('metadata'), str) else data.get('metadata', {})
+        data['trust_status'] = TrustStatus(data.get('trust_status') or data['metadata'].get('trust_status') or TrustStatus.CONFIRMED.value)
+        data['origin'] = Origin(data.get('origin') or data['metadata'].get('origin') or Origin.USER.value)
+        data['review_status'] = ReviewStatus(data.get('review_status') or data['metadata'].get('review_status') or ReviewStatus.ACCEPTED.value)
+        data['user_comment'] = data.get('user_comment') or data['metadata'].get('user_comment') or None
         data['created_at'] = datetime.fromisoformat(data['created_at'])
         return cls(**data)
 

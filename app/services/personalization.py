@@ -12,7 +12,7 @@ from pathlib import Path
 from typing import Any, Optional
 
 from app.agents.insights import Insight, InsightStore, InsightType
-from app.core.models import Edge, EdgeType, Node
+from app.core.models import Edge, EdgeType, Node, Origin, ReviewStatus, TrustStatus
 from app.core.repository import GraphRepository
 
 
@@ -338,21 +338,18 @@ class PersonalizationService:
             return effects
 
         if action in {FeedbackAction.CONFIRM, FeedbackAction.REFINE}:
-            edge = self._ensure_edge(
-                left.id,
-                right.id,
-                EdgeType.RELATED_TO,
-                weight=0.9 if action == FeedbackAction.CONFIRM else 0.7,
-                metadata={
-                    "source": "user_feedback",
-                    "insight_id": insight.id,
-                    "refinement": note if action == FeedbackAction.REFINE else None,
-                },
-            )
-            effects.append(f"related_edge:{edge.id}")
             for node in (left, right):
                 self._mark_node_interaction(node, action.value, note)
                 effects.append(f"updated_node:{node.id}")
+                node.metadata["pending_connection_review"] = {
+                    "insight_id": insight.id,
+                    "other_node_id": right.id if node.id == left.id else left.id,
+                    "action": action.value,
+                    "note": note,
+                    "reason": "Hidden connection feedback does not create a manual edge without an explicit MVP edge type.",
+                }
+                self.repository.update_node(node)
+            effects.append("manual_edge_not_created:missing_edge_type")
         else:
             for node in (left, right):
                 self._mark_node_resolution(node, "connection_rejected", note)
@@ -422,6 +419,10 @@ class PersonalizationService:
             edge_type=edge_type,
             weight=weight,
             metadata={key: value for key, value in metadata.items() if value is not None},
+            trust_status=TrustStatus.CONFIRMED,
+            origin=Origin.USER,
+            review_status=ReviewStatus.ACCEPTED,
+            user_comment=metadata.get("note"),
         )
         self.repository.add_edge(edge)
         return edge
