@@ -18,7 +18,7 @@ from app.agents.insights import Digest, Insight
 from app.agents.proactive import AgentSettings, ProactiveAgent
 from app.agents.scheduler import build_agent_scheduler
 from app.config import load_settings
-from app.core.models import Edge, EdgeType, Node, NodeType, Origin, ReviewStatus, SourceProvenance, TrustStatus
+from app.core.models import Edge, EdgeLayer, EdgeType, Node, NodeType, Origin, ReviewStatus, SourceProvenance, TrustStatus
 from app.core.repository import GraphRepository
 from app.llm.extraction import extract_and_store, LLMService
 from app.services.external_sources import ExternalSourceIngestor
@@ -41,6 +41,9 @@ class AddKnowledgeResponse(BaseModel):
     nodes_created: int
     edges_created: int
     summary: str
+    llm_status: str = "skipped"
+    warnings: List[str] = Field(default_factory=list)
+    errors: List[str] = Field(default_factory=list)
 
 
 class IngestSourceRequest(BaseModel):
@@ -115,6 +118,7 @@ class EdgeCreateRequest(BaseModel):
     source_id: str = Field(..., min_length=1)
     target_id: str = Field(..., min_length=1)
     edge_type: str = Field(...)
+    edge_layer: Optional[str] = None
     weight: float = Field(default=1.0)
     user_comment: Optional[str] = None
     trust_status: Optional[str] = None
@@ -128,6 +132,7 @@ class EdgePatchRequest(BaseModel):
     source_id: Optional[str] = None
     target_id: Optional[str] = None
     edge_type: Optional[str] = None
+    edge_layer: Optional[str] = None
     weight: Optional[float] = None
     user_comment: Optional[str] = None
     trust_status: Optional[str] = None
@@ -187,6 +192,7 @@ class EdgeResponse(BaseModel):
     source_id: str
     target_id: str
     edge_type: str
+    edge_layer: str
     weight: float
     metadata: Dict[str, Any]
     trust_status: str
@@ -197,11 +203,14 @@ class EdgeResponse(BaseModel):
 
 class GraphStatsResponse(BaseModel):
     """Статистика графа."""
+    schema_version: int = 1
     total_nodes: int
     total_edges: int
     total_fragments: int
+    total_proposals: int = 0
     node_types: Dict[str, int]
     edge_types: Dict[str, int]
+    edge_layers: Dict[str, int] = Field(default_factory=dict)
     avg_node_strength: float
     forgotten_nodes_count: int
 
@@ -242,6 +251,7 @@ class InsightFeedbackRequest(BaseModel):
     """Реакция пользователя на инсайт."""
     action: str = Field(..., description="Действие: confirm, reject, useful, ignore, etc.")
     note: Optional[str] = Field(default=None, description="Необязательное уточнение")
+    edge_type: Optional[str] = Field(default=None, description="Тип связи для confirm/refine hidden connection")
 
 
 class InsightFeedbackResponse(BaseModel):
@@ -434,7 +444,12 @@ def _clean_tags(tags: Optional[List[str]]) -> List[str]:
 
 
 def _request_fields_set(request: BaseModel) -> set[str]:
-    return set(getattr(request, "model_fields_set", None) or getattr(request, "__fields_set__", set()))
+    fields: Any = getattr(request, "model_fields_set", None)
+    if fields is None:
+        fields = getattr(request, "__fields_set__", set())
+    if fields is None:
+        fields = set()
+    return {str(field) for field in fields}
 
 
 def _model_to_dict(model: BaseModel, exclude_unset: bool = False) -> Dict[str, Any]:
@@ -491,6 +506,7 @@ def _edge_response(edge: Edge) -> EdgeResponse:
         source_id=edge.source_id,
         target_id=edge.target_id,
         edge_type=edge.edge_type.value,
+        edge_layer=edge.edge_layer.value,
         weight=edge.weight,
         metadata=edge.metadata,
         trust_status=edge.trust_status.value,
@@ -565,7 +581,10 @@ async def add_knowledge(request: AddKnowledgeRequest):
             nodes_created=len(fragment.extracted_nodes),
             edges_created=len([e for e in repository.get_all_edges() 
                              if e.metadata.get('source_fragment') == fragment.id]),
-            summary=fragment.content[:200] + "..." if len(fragment.content) > 200 else fragment.content
+            summary=fragment.content[:200] + "..." if len(fragment.content) > 200 else fragment.content,
+            llm_status=fragment.llm_status,
+            warnings=fragment.warnings,
+            errors=fragment.errors,
         )
         
     except Exception as e:
@@ -582,7 +601,7 @@ async def ingest_source(request: IngestSourceRequest):
     ingestor = ExternalSourceIngestor(repository, llm_service=get_llm_service())
     try:
         if request.url:
-            fragment = await ingestor.ingest_url(request.url)
+            fragment = await ingestor.ingest_url(request.url, source_type=request.source_type)
         else:
             fragment = await ingestor.ingest_text(
                 text=request.text or "",
@@ -596,6 +615,9 @@ async def ingest_source(request: IngestSourceRequest):
                 if edge.metadata.get("source_fragment") == fragment.id
             ]),
             summary=fragment.content[:200] + "..." if len(fragment.content) > 200 else fragment.content,
+            llm_status=fragment.llm_status,
+            warnings=fragment.warnings,
+            errors=fragment.errors,
         )
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"Error ingesting source: {str(exc)}")
@@ -789,11 +811,14 @@ async def create_edge(request: EdgeCreateRequest):
         edge_type = EdgeType(request.edge_type)
     except ValueError:
         raise HTTPException(status_code=400, detail=f"Invalid edge_type: {request.edge_type}")
+    if request.edge_layer and request.edge_layer != EdgeLayer.MANUAL.value:
+        raise HTTPException(status_code=400, detail="Manual edge endpoint only creates manual edges")
 
     edge = Edge(
         source_id=request.source_id,
         target_id=request.target_id,
         edge_type=edge_type,
+        edge_layer=EdgeLayer.MANUAL,
         weight=request.weight,
         metadata=dict(request.metadata),
         trust_status=TrustStatus.CONFIRMED,
@@ -830,6 +855,11 @@ async def update_edge(edge_id: str, request: EdgePatchRequest):
             edge.edge_type = EdgeType(request.edge_type)
         except ValueError:
             raise HTTPException(status_code=400, detail=f"Invalid edge_type: {request.edge_type}")
+    if request.edge_layer is not None:
+        try:
+            edge.edge_layer = EdgeLayer(request.edge_layer)
+        except ValueError:
+            raise HTTPException(status_code=400, detail=f"Invalid edge_layer: {request.edge_layer}")
     if request.weight is not None:
         edge.weight = request.weight
     if "user_comment" in fields_set:
@@ -933,6 +963,7 @@ async def get_edges(
                 source_id=e.source_id,
                 target_id=e.target_id,
                 edge_type=e.edge_type.value,
+                edge_layer=e.edge_layer.value,
                 weight=e.weight,
                 metadata=e.metadata,
                 trust_status=e.trust_status.value,
@@ -1032,6 +1063,7 @@ async def react_to_insight(insight_id: str, request: InsightFeedbackRequest):
             insight_id=insight_id,
             action=request.action,
             note=request.note,
+            edge_type=request.edge_type,
         )
     except ValueError as exc:
         message = str(exc)

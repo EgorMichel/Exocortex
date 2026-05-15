@@ -392,8 +392,14 @@
       marker-end: url(#arrowDefault);
     }
 
-    .edge.used_in {
+    .edge.related_to {
       stroke: var(--green);
+      marker-end: url(#arrowGreen);
+    }
+
+    .edge.supports {
+      stroke: var(--green);
+      stroke-width: 2.2;
       marker-end: url(#arrowGreen);
     }
 
@@ -405,6 +411,17 @@
 
     .edge.derived_from {
       stroke-dasharray: 7 5;
+    }
+
+    .edge.example_of,
+    .edge.clarifies {
+      stroke-dasharray: 3 5;
+    }
+
+    .edge.service,
+    .edge.suggested {
+      stroke-opacity: 0.34;
+      stroke-dasharray: 4 6;
     }
 
     .edge.active,
@@ -958,9 +975,12 @@
       source: "Source",
     };
     const EDGE_LABELS = {
-      used_in: "used_in",
+      related_to: "related_to",
+      supports: "supports",
       derived_from: "derived_from",
       contradicts: "contradicts",
+      example_of: "example_of",
+      clarifies: "clarifies",
     };
 
     const state = {
@@ -1077,7 +1097,7 @@
       newEdgeType.innerHTML = Object.keys(EDGE_LABELS).map((type) => (
         `<option value="${escapeHtml(type)}">${escapeHtml(EDGE_LABELS[type])}</option>`
       )).join("");
-      newEdgeType.value = "derived_from";
+      newEdgeType.value = "related_to";
     }
 
     function applyTheme(theme) {
@@ -1296,7 +1316,8 @@
           return "";
         }
         const isNeighbor = edge.source_id === state.selectedId || edge.target_id === state.selectedId;
-        return `<path class="edge ${escapeHtml(edge.edge_type)} ${isNeighbor ? "neighbor" : ""}" data-edge-id="${escapeHtml(edge.id)}" d="${edgePath(source, target)}"></path>`;
+        const layerClass = edge.edge_layer ? escapeHtml(edge.edge_layer) : "manual";
+        return `<path class="edge ${escapeHtml(edge.edge_type)} ${layerClass} ${isNeighbor ? "neighbor" : ""}" data-edge-id="${escapeHtml(edge.id)}" d="${edgePath(source, target)}"></path>`;
       }).join("");
 
       nodeLayer.innerHTML = visibleNodes.map((node) => {
@@ -1450,6 +1471,7 @@
             <button class="edge-box" type="button" data-related-id="${escapeHtml(otherId)}">
               <div class="row">
                 <span class="badge">${escapeHtml(edge.edge_type)}</span>
+                <span class="badge">${escapeHtml(edge.edge_layer || "manual")}</span>
                 <span class="muted">${Number(edge.weight || 0).toFixed(2)}</span>
               </div>
               <h3>${escapeHtml(shorten(other?.content || otherId, 62))}</h3>
@@ -1627,7 +1649,7 @@
         state.edgeDraft = { sourceId: null, targetId: null };
         document.querySelector("#newEdgeComment").value = "";
         document.querySelector("#newEdgeWeight").value = "1";
-        newEdgeType.value = "derived_from";
+        newEdgeType.value = "related_to";
         await loadGraph(edge.source_id);
       } catch (error) {
         setStatus(error.message, true);
@@ -1640,7 +1662,7 @@
       state.edgeDraft = { sourceId: null, targetId: null };
       document.querySelector("#newEdgeComment").value = "";
       document.querySelector("#newEdgeWeight").value = "1";
-      newEdgeType.value = "derived_from";
+      newEdgeType.value = "related_to";
       renderEdgeDraft();
     }
 

@@ -78,6 +78,7 @@ def test_repository_save_creates_storage_directory(tmp_path):
 
     repo.save()
 
+    assert storage_path.with_suffix(".graph.json").exists()
     assert storage_path.with_suffix(".gexf").exists()
     assert storage_path.with_suffix(".fragments.json").exists()
 
@@ -604,7 +605,7 @@ def test_reader_manual_fragments_keep_defaults_and_tags(monkeypatch, tmp_path):
     assert idea.metadata["tags"] == ["idea", "reader"]
 
 
-def test_legacy_node_and_edge_types_are_rejected(monkeypatch, tmp_path):
+def test_legacy_node_types_are_rejected_and_mvp_edge_type_is_accepted(monkeypatch, tmp_path):
     _disable_llm(monkeypatch)
     storage_path = tmp_path / "api_legacy_rejected_graph"
     monkeypatch.setenv("STORAGE_PATH", str(storage_path))
@@ -637,7 +638,9 @@ def test_legacy_node_and_edge_types_are_rejected(monkeypatch, tmp_path):
 
     assert node_response.status_code == 400
     assert manual_response.status_code == 400
-    assert edge_response.status_code == 400
+    assert edge_response.status_code == 200
+    assert edge_response.json()["edge_type"] == "related_to"
+    assert edge_response.json()["edge_layer"] == "manual"
 
 
 def test_cli_add_stats_search_and_clear(monkeypatch, tmp_path, capsys):
@@ -658,6 +661,7 @@ def test_cli_add_stats_search_and_clear(monkeypatch, tmp_path, capsys):
     assert "No nodes found." in search_output
 
     assert cli.main(["clear"]) == 0
+    assert not storage_path.with_suffix(".graph.json").exists()
     assert not storage_path.with_suffix(".gexf").exists()
     assert not storage_path.with_suffix(".fragments.json").exists()
 

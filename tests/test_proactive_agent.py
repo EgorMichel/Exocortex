@@ -302,6 +302,29 @@ def test_saved_analysis_state_skips_unchanged_node_pairs(tmp_path):
     assert (tmp_path / "graph.analysis_state.json").exists()
 
 
+def test_agent_persists_hidden_connections_as_proposals(tmp_path):
+    repo = GraphRepository(storage_path=str(tmp_path / "graph"))
+    first = Node(content="Python supports data analysis.", metadata={"topic": "python data"})
+    second = Node(content="Python helps data analysis workflows.", metadata={"topic": "python data"})
+    repo.add_node(first)
+    repo.add_node(second)
+
+    agent = ProactiveAgent(
+        repo,
+        settings=AgentSettings(similarity_threshold=0.1, digest_limit=5),
+    )
+
+    digest = asyncio.run(agent.analyze(save=True))
+    proposals = repo.get_all_proposals()
+
+    assert digest.insights
+    assert proposals
+    assert proposals[0].proposal_type.value == "proposed_edge"
+    assert proposals[0].review_status.value == "pending"
+    assert digest.insights[0].metadata["proposal_id"] == proposals[0].id
+    assert repo.get_all_edges() == []
+
+
 def test_analysis_state_rechecks_pairs_when_node_changes(tmp_path):
     repo = GraphRepository(storage_path=str(tmp_path / "graph"))
     first = Node(content="Python supports data analysis.", metadata={"topic": "python data"})
@@ -496,7 +519,7 @@ def test_insight_store_round_trips_digest(tmp_path):
     assert latest.insights[0].node_ids == ["a", "b"]
 
 
-def test_personalization_confirm_connection_records_review_without_edge(tmp_path):
+def test_personalization_confirm_connection_creates_manual_related_edge(tmp_path):
     repo = GraphRepository(storage_path=str(tmp_path / "graph"))
     first = Node(content="Python helps automate data workflows.", metadata={"topic": "python data"})
     second = Node(content="Automation improves data processing.", metadata={"topic": "python data"})
@@ -519,9 +542,11 @@ def test_personalization_confirm_connection_records_review_without_edge(tmp_path
     edges = repo.get_edges_between(first.id, second.id)
     updated_first = repo.get_node(first.id)
     assert feedback.action == FeedbackAction.CONFIRM
-    assert edges == []
-    assert "manual_edge_not_created:missing_edge_type" in feedback.effects
-    assert updated_first.metadata["pending_connection_review"]["insight_id"] == insight.id
+    assert len(edges) == 1
+    assert edges[0].edge_type == EdgeType.RELATED_TO
+    assert edges[0].edge_layer.value == "manual"
+    assert f"manual_edge:{edges[0].id}" in feedback.effects
+    assert updated_first.metadata["last_feedback"] == "confirm"
 
 
 def test_personalization_reminder_useful_refreshes_node_and_profile(tmp_path):

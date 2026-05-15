@@ -12,6 +12,7 @@ import pytest
 from datetime import datetime, timedelta, timezone
 from app.core.models import (
     Edge,
+    EdgeLayer,
     EdgeType,
     KnowledgeFragment,
     Node,
@@ -347,6 +348,17 @@ class TestGraphRepository:
         assert retrieved is not None
         assert retrieved.source_id == node1.id
         assert retrieved.edge_type == EdgeType.DERIVED_FROM
+
+    def test_add_edge_rejects_missing_nodes(self, repo):
+        """Repository does not let NetworkX create empty nodes from broken edges."""
+        node = Node(content="Existing")
+        repo.add_node(node)
+
+        with pytest.raises(ValueError):
+            repo.add_edge(Edge(source_id=node.id, target_id="missing"))
+
+        assert repo.get_node("missing") is None
+        assert repo.get_all_edges() == []
     
     def test_get_edges_between(self, repo):
         """Получение связей между узлами."""
@@ -417,6 +429,33 @@ class TestGraphRepository:
         assert len(neighbors) == 2
         neighbor_contents = {n.content for n in neighbors}
         assert neighbor_contents == {"Neighbor 1", "Neighbor 2"}
+
+    def test_get_neighbors_supports_incoming_outgoing_and_layer_filters(self, repo):
+        """Navigation can traverse directionally and filter manual/service layers."""
+        center = Node(content="Center")
+        incoming = Node(content="Incoming")
+        outgoing = Node(content="Outgoing")
+        service = Node(content="Service")
+        for node in (center, incoming, outgoing, service):
+            repo.add_node(node)
+
+        repo.add_edge(Edge(source_id=incoming.id, target_id=center.id, edge_type=EdgeType.RELATED_TO))
+        repo.add_edge(Edge(source_id=center.id, target_id=outgoing.id, edge_type=EdgeType.RELATED_TO))
+        repo.add_edge(
+            Edge(
+                source_id=center.id,
+                target_id=service.id,
+                edge_type=EdgeType.RELATED_TO,
+                edge_layer=EdgeLayer.SERVICE,
+            )
+        )
+
+        assert {node.content for node in repo.get_neighbors(center.id, direction="in")} == {"Incoming"}
+        assert {node.content for node in repo.get_neighbors(center.id, direction="out")} == {"Outgoing", "Service"}
+        assert {node.content for node in repo.get_neighbors(center.id, edge_layer=EdgeLayer.MANUAL)} == {
+            "Incoming",
+            "Outgoing",
+        }
     
     def test_get_related_nodes(self, repo):
         """Получение связанных узлов с связями."""
@@ -434,6 +473,43 @@ class TestGraphRepository:
         related_node, related_edge = related[0]
         assert related_node.id == node2.id
         assert related_edge.id == edge.id
+
+    def test_get_related_nodes_includes_incoming_edges(self, repo):
+        """Related nodes include incoming edges by default."""
+        node1 = Node(content="A")
+        node2 = Node(content="B")
+        repo.add_node(node1)
+        repo.add_node(node2)
+
+        edge = Edge(source_id=node2.id, target_id=node1.id, edge_type=EdgeType.SUPPORTS)
+        repo.add_edge(edge)
+
+        related = repo.get_related_nodes(node1.id)
+
+        assert len(related) == 1
+        related_node, related_edge = related[0]
+        assert related_node.id == node2.id
+        assert related_edge.source_id == node2.id
+
+    def test_legacy_used_in_edges_migrate_to_related_to(self, repo):
+        """Old persisted used_in values are normalized to related_to."""
+        node1 = Node(content="A")
+        node2 = Node(content="B")
+        repo.add_node(node1)
+        repo.add_node(node2)
+
+        edge = Edge.from_dict({
+            "id": "legacy-edge",
+            "source_id": node1.id,
+            "target_id": node2.id,
+            "edge_type": "used_in",
+            "weight": 1.0,
+            "metadata": "{}",
+            "created_at": utc_now().isoformat(),
+        })
+        repo.add_edge(edge)
+
+        assert repo.get_edge("legacy-edge").edge_type == EdgeType.RELATED_TO
     
     def test_add_and_get_fragment(self, repo):
         """Добавление и получение фрагмента."""

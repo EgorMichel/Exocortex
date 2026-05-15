@@ -14,7 +14,7 @@ from typing import Any, Optional
 
 from app.agents.embeddings import LocalTextEmbeddingService, cosine_similarity
 from app.agents.insights import Digest, Insight, InsightStore, InsightType
-from app.core.models import EdgeType, Node
+from app.core.models import AgentProposal, EdgeType, Node, ProposalType, ReviewStatus
 from app.core.repository import GraphRepository
 
 
@@ -171,6 +171,7 @@ class ProactiveAgent:
 
         digest = self.generate_digest(insights)
         if save:
+            self._store_proposals_for_digest(digest)
             self.insight_store.save_digest(digest)
             self.analysis_state_store.save_state(self._current_analysis_state())
 
@@ -303,6 +304,47 @@ class ProactiveAgent:
         """Load the latest persisted digest."""
         return self.insight_store.get_latest_digest()
 
+    def _store_proposals_for_digest(self, digest: Digest) -> None:
+        """Persist agent observations as proposals separate from manual graph edges."""
+        for insight in digest.insights:
+            proposal_type = self._proposal_type_for_insight(insight)
+            if proposal_type is None:
+                continue
+            proposal = AgentProposal(
+                proposal_type=proposal_type,
+                node_ids=list(insight.node_ids),
+                edge_ids=list(insight.edge_ids),
+                payload={
+                    "insight_id": insight.id,
+                    "insight_type": insight.insight_type.value,
+                    "title": insight.title,
+                    "description": insight.description,
+                    "metadata": insight.metadata,
+                    "default_edge_type": self._default_proposal_edge_type(insight),
+                },
+                score=insight.score,
+                review_status=ReviewStatus.PENDING,
+            )
+            self.repository.add_proposal(proposal)
+            insight.metadata["proposal_id"] = proposal.id
+            insight.metadata["proposal_type"] = proposal.proposal_type.value
+
+    def _proposal_type_for_insight(self, insight: Insight) -> Optional[ProposalType]:
+        if insight.insight_type == InsightType.HIDDEN_CONNECTION:
+            return ProposalType.PROPOSED_EDGE
+        if insight.insight_type == InsightType.CONTRADICTION:
+            return ProposalType.POSSIBLE_CONTRADICTION
+        if insight.insight_type == InsightType.REMINDER:
+            return ProposalType.REMINDER
+        return None
+
+    def _default_proposal_edge_type(self, insight: Insight) -> Optional[str]:
+        if insight.insight_type == InsightType.HIDDEN_CONNECTION:
+            return EdgeType.RELATED_TO.value
+        if insight.insight_type == InsightType.CONTRADICTION:
+            return EdgeType.CONTRADICTS.value
+        return None
+
     def _can_detect_contradictions(self) -> bool:
         """Return whether the configured LLM service can actually check contradictions."""
         if not self.llm_service:
@@ -423,8 +465,9 @@ class ProactiveAgent:
         """Ask an LLM-like service whether two nodes contradict each other."""
         left_text = self._node_analysis_text(left)
         right_text = self._node_analysis_text(right)
-        if hasattr(self.llm_service, "detect_contradiction"):
-            result = self.llm_service.detect_contradiction(left_text, right_text)
+        detector = getattr(self.llm_service, "detect_contradiction", None)
+        if callable(detector):
+            result = detector(left_text, right_text)
             if asyncio.iscoroutine(result):
                 result = await result
             return result if isinstance(result, dict) else {}
@@ -530,7 +573,7 @@ class ProactiveAgent:
 
     def _normalize_detection_results(self, result: Any, expected_count: int) -> list[dict[str, Any]]:
         """Normalize custom or LLM batch results to one detection dict per pair."""
-        detections = [{} for _ in range(expected_count)]
+        detections: list[dict[str, Any]] = [{} for _ in range(expected_count)]
         if isinstance(result, dict):
             raw_results = result.get("results", [])
         else:

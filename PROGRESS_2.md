@@ -4,16 +4,16 @@
 
 ## Общий статус
 
-**Текущий этап:** после Этапа 2.  
-**Следующий рекомендуемый фокус:** Этап 4 - предложения LLM при добавлении.
+**Текущий этап:** после Этапа 3 + архитектурный рефакторинг из `REFACTORING_PLAN.md`.  
+**Следующий рекомендуемый фокус:** полноценный review queue для LLM-предложений при добавлении.
 
 Новая базовая модель данных уже приведена к MVP 2-парадигме: старые типы узлов и ручных связей удалены из продуктовой модели, manual capture создает `quote` и `idea`, semantic similarity больше не подтверждается как generic-связь, а ручные узлы и связи стали основным пользовательским действием через API, `/reader` и `/graph`.
 
-Текущий автоматический тестовый набор: **97 тестов проходят**.
+Текущий автоматический тестовый набор: **103 теста проходят**.
 
 ## Этап 1. Чистая модель данных ✅ (100%)
 
-**Цель:** привести ядро данных к новой парадигме без legacy-совместимости.
+**Цель:** привести ядро данных к новой парадигме с минимальной миграцией старых `used_in`-связей.
 
 - [x] Заменен набор типов узлов на MVP-набор:
   - `idea`;
@@ -28,15 +28,14 @@
   - `concept`;
   - `definition`.
 - [x] Заменен набор ручных типов связей на MVP-набор:
-  - `used_in`;
-  - `derived_from`;
-  - `contradicts`.
-- [x] Удалены legacy-ручные связи из продуктовой модели и новой бизнес-логики:
   - `related_to`;
   - `supports`;
+  - `contradicts`;
+  - `derived_from`;
   - `example_of`;
-  - `part_of`;
-  - `similar_to`.
+  - `clarifies`.
+- [x] Legacy `used_in` больше не является новым продуктовым типом; persisted `used_in` при загрузке мигрирует в `related_to`.
+- [x] Удалены не-MVP legacy-связи из новой бизнес-логики: `part_of`, `similar_to`.
 - [x] Semantic similarity оставлена как вычисляемый сигнал для hidden connection / suggestion flow, а не как ручная связь.
 - [x] Добавлены явные поля модели и стандарты metadata:
   - `trust_status`;
@@ -59,15 +58,15 @@
 - [x] Обновлен graph UI: списки и стили типов узлов и связей соответствуют MVP 2.
 - [x] Обновлен personalization feedback:
   - contradiction feedback может создавать `contradicts`;
-  - hidden connection feedback больше не создает generic edge без выбранного типа;
-  - вместо этого сохраняется pending metadata для дальнейшего review.
+  - hidden connection `confirm/refine` создаёт manual `related_to` по умолчанию или выбранный API `edge_type`;
+  - `reject` закрывает предложение без изменения смыслового графа.
 - [x] Обновлены тесты моделей, сериализации, LLM extraction, API/CLI, reader и proactive/personalization flows.
 - [x] Добавлена/уточнена инструкция очистки старого storage: `python -m app.cli clear`.
 - [x] Обновлены `README.md`, `SETUP.md`, `CHANGELOG.md`.
 
 Критерий готовности:
 
-- [x] Новая модель не содержит legacy alias.
+- [x] Новая бизнес-логика не создаёт legacy `used_in`; загрузчик хранит совместимость миграцией `used_in -> related_to`.
 - [x] Новые узлы и связи хранят доверие, происхождение, теги и заголовок.
 - [x] Чистый storage создается и открывается.
 - [x] Тесты проходят.
@@ -148,7 +147,7 @@
 - [x] Добавлены тесты, что legacy-типы не принимаются.
 - [x] Добавлены тесты, что ручные узлы/связи получают `origin=user`, `trust_status=confirmed`, `review_status=accepted`.
 
-## Этап 4. Предложения LLM при добавлении ⏳ (не начат, примерно 5%)
+## Этап 4. Предложения LLM при добавлении ⏳ (частично, примерно 35%)
 
 **Цель:** заменить автоматическое построение графа на подтверждаемые предложения.
 
@@ -156,17 +155,18 @@
 
 - [x] LLM extraction ограничен MVP 2-типами.
 - [x] LLM-created nodes/edges помечаются как `suggested/pending`, а не как полностью подтвержденные пользовательские решения.
+- [x] Есть модель `AgentProposal` с типами `proposed_edge`, `proposed_tag`, `possible_duplicate`, `possible_contradiction`, `reminder`.
+- [x] Есть JSON-хранилище предложений `.proposals.json`.
+- [x] Агент сохраняет hidden connections как proposals без создания edge.
 
 Еще не сделано:
 
-- [ ] Нет модели `Suggestion`.
-- [ ] Нет JSON-хранилища предложений.
 - [ ] Нет API для генерации, списка, принятия и отклонения suggestions.
 - [ ] `/api/knowledge` еще остается extraction endpoint и не переписан в полноценный suggestion flow.
 - [ ] Нет accept/reject логики для LLM-предложений.
-- [ ] Нет тестов suggestions lifecycle.
+- [ ] Нет полного API lifecycle для LLM suggestions.
 
-## Этап 5. Служебные связи и визуальное разделение слоев ⏳ (частично, примерно 10%)
+## Этап 5. Служебные связи и визуальное разделение слоев ⏳ (частично, примерно 55%)
 
 **Цель:** отделить пользовательский смысл от машинных подсказок.
 
@@ -175,16 +175,17 @@
 - [x] Semantic similarity не сохраняется как ручная связь `similar_to`.
 - [x] Hidden connection остается агентским инсайтом, а не подтвержденным edge.
 - [x] У узлов и связей есть `trust_status`, `origin`, `review_status`.
+- [x] Есть `EdgeLayer`: `manual`, `service`, `suggested`.
+- [x] API responses возвращают `edge_layer`; ручной endpoint создаёт только `manual` edge.
+- [x] Graph UI показывает `service/suggested` связи приглушённо/пунктиром.
+- [x] Есть repository filtering/navigation tests по слоям.
 
 Еще не сделано:
 
-- [ ] Нет полноценного разделения edge layers: `manual`, `suggested`, `automatic`.
 - [ ] API `/api/edges` не фильтрует связи по layer.
-- [ ] Graph UI не показывает разные слои разными стилями.
 - [ ] Нет фильтров graph UI по слою доверия.
-- [ ] Нет тестов на фильтрацию и сериализацию слоев.
 
-## Этап 6. Очередь предложений и новый inbox ⏳ (частично, примерно 20%)
+## Этап 6. Очередь предложений и новый inbox ⏳ (частично, примерно 35%)
 
 **Цель:** превратить текущий inbox в review queue для развития графа.
 
@@ -195,13 +196,14 @@
 - [x] Реакции на contradiction, hidden connection и reminder.
 - [x] История пользовательских реакций хранится в `.feedback.json`.
 - [x] Hidden connection feedback больше не создает бессмысленную legacy-связь.
+- [x] `Insight` при сохранении дайджеста связывается с `AgentProposal` через `proposal_id`.
+- [x] Contradiction insights сохраняются как `possible_contradiction` proposal.
 
 Еще не сделано:
 
 - [ ] Inbox еще не переименован и не переосмыслен как полноценный Review/Suggestions flow.
-- [ ] Нет объединения `Insight` и будущей модели `Suggestion`.
 - [ ] Нет действий `edit and accept`, `defer`, `open in graph`.
-- [ ] Contradiction flow еще не оформлен как полноценная review-сущность.
+- [ ] Contradiction flow ещё не имеет отдельного review UI/API.
 - [ ] Нет тестов нового review queue поверх suggestions.
 
 ## Этап 7. Внутренние рекомендации и мини-дайджест ⏳ (частично, примерно 35%)
@@ -249,8 +251,8 @@
 
 ## Текущие ограничения и важные замечания
 
-- Совместимость со старыми графами намеренно не поддерживается.
-- Если в storage есть старые типы (`excerpt`, `thesis`, `concept`, `definition`, `related_to`, `supports`, `example_of`, `part_of`, `similar_to`), перед запуском новой версии нужно выполнить:
+- Старые `used_in` edge поддерживаются через миграцию в `related_to`; остальные legacy-типы по-прежнему лучше очищать перед запуском.
+- Если в storage есть старые node-типы (`excerpt`, `thesis`, `concept`, `definition`) или старые не-MVP edge-типы (`part_of`, `similar_to`), перед запуском новой версии нужно выполнить:
 
 ```bash
 python -m app.cli clear
@@ -258,12 +260,14 @@ python -m app.cli clear
 
 - `source_text` сейчас является контекстом происхождения знания; source хранится как provenance-привязка, а не как автоматически создаваемый смысловой `source`-узел.
 - `tags` уже есть в модели; `/reader` и `/graph` позволяют вводить пользовательские теги вручную.
-- `/api/knowledge` все еще существует как extraction/import endpoint; по плану Этапа 4 его нужно удалить или переписать в источник предложений.
+- `/api/knowledge` всё ещё существует как extraction/import endpoint; теперь он честно возвращает `llm_status`, `warnings`, `errors`, но по плану Этапа 4 его нужно переписать в полноценный источник LLM-предложений.
 
 ## Последняя проверка
 
 - `venv\Scripts\python -m pytest -q`
-- Результат: `97 passed`
+- `venv\Scripts\python -m compileall app`
+- `venv\Scripts\python -m mypy app`
+- Результат: `103 passed`, compileall ok, mypy без ошибок
 
 ## Последнее обновление
 

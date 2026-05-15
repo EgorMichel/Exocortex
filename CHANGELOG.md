@@ -17,7 +17,7 @@
   - Пользовательские endpoints `POST /api/nodes`, `PATCH /api/nodes/{node_id}`, `POST /api/edges`, `PATCH /api/edges/{edge_id}`
   - Создание ручных узлов и связей в `/graph`
   - Редактирование выбранного узла в боковой панели `/graph`
-  - Выбор двух узлов source/target и создание ручной связи `used_in`, `derived_from` или `contradicts`
+  - Выбор двух узлов source/target и создание ручной связи `related_to`, `supports`, `contradicts`, `derived_from`, `example_of` или `clarifies`
   - Выбор MVP 2-типа и ввод тегов в `/reader`; теги сохраняются в стандартное поле `tags`
   - Ручные узлы и связи при создании получают `origin=user`, `trust_status=confirmed`, `review_status=accepted`
 - **Запуск приложения**:
@@ -32,18 +32,19 @@
 - **Базовая структура проекта**: Модульная архитектура с разделением на `core`, `agents`, `llm`, `api`, `services`, `utils`
 - **Модели данных** (`app/core/models.py`):
   - `Node`: Узел графа знаний с полями id, тип, содержание, редактируемый `source_text`, метаданные, `trust_status`, `origin`, `review_status`, `user_comment`, `title`, `tags`, параметры памяти (strength, decay_rate, last_interacted)
-  - `Edge`: Ручная логическая связь между узлами с полями id, тип, источник, цель, вес, метаданные, `trust_status`, `origin`, `review_status`, `user_comment`
+  - `Edge`: Ручная логическая связь между узлами с полями id, тип, слой, источник, цель, вес, метаданные, `trust_status`, `origin`, `review_status`, `user_comment`
   - `NodeType`: MVP 2-типы узлов (IDEA, FACT, QUOTE, QUESTION, CONCLUSION, SOURCE)
-  - `EdgeType`: MVP 2-типы ручных связей (USED_IN, DERIVED_FROM, CONTRADICTS)
+  - `EdgeType`: MVP-типы ручных связей (`RELATED_TO`, `SUPPORTS`, `CONTRADICTS`, `DERIVED_FROM`, `EXAMPLE_OF`, `CLARIFIES`); persisted `used_in` мигрирует в `related_to`
   - `TrustStatus`, `Origin`, `ReviewStatus`: стандартизированные статусы доверия, происхождения и проверки
-  - `KnowledgeFragment`: Исходный фрагмент знания с метаданными
+  - `KnowledgeFragment`: Исходный фрагмент знания с метаданными и `llm_status`/`warnings`/`errors`
+  - `AgentProposal`: Reviewable предложения агента (`proposed_edge`, `proposed_tag`, `possible_duplicate`, `possible_contradiction`, `reminder`)
 - **Графовый репозиторий** (`app/core/repository.py`):
   - CRUD операции для узлов и связей
   - Поиск и фильтрация узлов по типу, содержимому
   - Получение «забытых» узлов на основе параметров памяти
   - Навигация по графу (соседние узлы, связанные узлы)
-  - Сохранение/загрузка графа в формате GEXF через NetworkX
-  - Сохранение/загрузка фрагментов знаний в JSON
+  - Canonical versioned JSON storage (`.graph.json`) со schema version, atomic write и file lock; GEXF оставлен как export/fallback
+  - Сохранение/загрузка фрагментов знаний и proposals в JSON
   - Статистика графа
 - **Интеграция LLM** (`app/llm/extraction.py`):
   - Пайплайн извлечения сущностей и связей из текста
@@ -57,6 +58,7 @@
   - Заготовка для проактивного агента
   - Модели `Insight`, `InsightType`, `Digest` и JSON-хранилище дайджестов
   - `ProactiveAgent` для фонового анализа графа
+  - Сохранение agent observations как proposals отдельно от ручного смыслового графа
   - Поиск забываемого контента на основе `strength`, `decay_rate`, `last_interacted`
   - Поиск неочевидных связей между похожими узлами без существующего ребра
   - Локальные векторные эмбеддинги для семантического сравнения узлов
@@ -70,6 +72,7 @@
   - API endpoints `POST /api/agent/analyze`, `GET /api/digest`, `GET /api/insights`, `POST /api/sources`
 - **Внешние источники** (`app/services/external_sources.py`):
   - Импорт прямого текста, UTF-8 файлов и текстовых URL в граф знаний через существующий LLM-пайплайн
+  - URL ingest: allowlist `http/https`, запрет localhost/private IP по умолчанию, проверка content-type, лимит размера и перенос blocking I/O в thread
 - **Ручной захват фрагментов** (`app/services/manual_capture.py`):
   - Тип узла `quote` для текста, вручную выделенного пользователем
   - Поле `source_text` у узла для хранения редактируемой цитаты/абзаца, на котором основана пользовательская мысль
@@ -88,7 +91,7 @@
   - JSON-хранилище пользовательских реакций `.feedback.json`
   - Реакции на противоречия, скрытые связи и напоминания
   - Обновление графа на основе feedback: усиление узлов, пометки разрешений, создание подтверждённых противоречий
-  - Hidden connection feedback больше не создаёт generic-связь без выбранного MVP-типа; вместо этого сохраняется pending metadata для review
+  - Hidden connection `confirm/refine` создаёт ручную `related_to`-связь по умолчанию; API feedback может передать выбранный `edge_type`; `reject` закрывает предложение без изменения смыслового графа
   - Базовая модель интересов: счётчики действий, частоты тем, взаимодействия с узлами, стиль сообщений
   - Встроенный web UI `/app` для inbox, реакций, запуска анализа и просмотра профиля интересов
   - Адаптация приоритизации инсайтов агента по темам, истории реакций и `interest_score` узлов
@@ -105,24 +108,25 @@
   - Тесты оптимизированного анализа: переиспользование candidate pairs, ранний skip без LLM-клиента, батчинг противоречий и пропуск неизменившихся пар
   - Тесты ручных мыслей с `source_text`, reader UI и повторного анализа при изменении источника
   - Тесты ручного создания/редактирования узлов и связей, reader tags/defaults и отказа от legacy-типов
-  - Текущий набор: 97 автоматических тестов
+  - Текущий набор: 103 автоматических теста
 
 ### Изменено
-- **Breaking change / MVP 2 data model**: Продуктовая модель переведена на чистый набор типов узлов `idea`, `fact`, `quote`, `question`, `conclusion`, `source` и ручных связей `used_in`, `derived_from`, `contradicts`; legacy-типы и alias не поддерживаются.
+- **Breaking change / MVP data model**: Ручные связи переведены на набор `related_to`, `supports`, `contradicts`, `derived_from`, `example_of`, `clarifies`; persisted `used_in` мигрирует в `related_to`.
 - **Storage reset**: Для старых графов с legacy-типами рекомендуется очистить storage командой `python -m app.cli clear` перед запуском новой версии.
 - **Manual capture defaults**: Выделенный фрагмент теперь создаёт `quote`, пользовательская мысль с `source_text` создаёт `idea`.
 - **Graph UI**: Списки фильтров и визуальные классы обновлены под MVP 2-типы узлов и связей; интерфейс позволяет создавать узлы, редактировать выбранный узел и создавать ручную связь между двумя выбранными узлами.
-- **LLM extraction**: Prompt/schema запрещают `related_to`, `supports`, `example_of`, `part_of`, `similar_to` и не превращают семантическую похожесть в ручную связь.
-- **API responses**: Узлы и связи возвращают стандартизированные поля `trust_status`, `origin`, `review_status`, `user_comment`; узлы также возвращают `title` и `tags`.
+- **LLM extraction**: Prompt/schema используют `related_to`, `supports`, `contradicts`, `derived_from`, `example_of`, `clarifies`; автоматические `source`-узлы запрещены и отбрасываются.
+- **API responses**: Узлы и связи возвращают стандартизированные поля `trust_status`, `origin`, `review_status`, `user_comment`; связи также возвращают `edge_layer`, узлы возвращают `title` и `tags`.
+- **API responses**: `/api/knowledge` и `/api/sources` возвращают `llm_status`, `warnings`, `errors`.
 - **API responses**: Узлы также возвращают структурированную provenance-привязку; `source_text` сохранён для совместимости.
 - **Proactive analysis**: Поиск похожих пар, embeddings, fingerprints и LLM-проверка противоречий учитывают `source_text` вместе с `content`
 - **LLM extraction**: Удалён алгоритмический fallback; без LLM-клиента или при ошибке ответа извлечение возвращает пустой результат
 - **Proactive digest**: Для противоречий в CLI-дайджесте выводятся оба исходных утверждения, которые сравнивал агент
-- **Contradiction prompt**: Заголовок и объяснение противоречия запрашиваются на языке сравниваемых утверждений
+- **Contradiction prompt**: Заголовок и объяснение противоречия запрашиваются на русском языке независимо от языка сравниваемых утверждений
 - **Proactive analysis**: `analyze` строит похожие пары один раз, кэширует terms/embeddings в рамках запуска и переиспользует список кандидатов для скрытых связей и противоречий
 - **Contradiction analysis**: OpenAI-compatible клиент получает батчи пар, а кастомный `detect_contradiction` остаётся совместимым с прежним попарным поведением
 - **CLI add**: Команда `add` стала единой точкой добавления текста, UTF-8 файлов, нескольких файлов, stdin и текстовых URL; отдельная импортная команда удалена
-- **Repository initialization**: Добавлена проверка существования файла графа с расширением `.gexf` перед загрузкой
+- **Repository initialization**: Canonical `.graph.json` загружается первым, старый `.gexf` используется как fallback
 - **Node.from_dict()**: Добавлена обработка служебных атрибутов NetworkX (label)
 
 ### Техническое

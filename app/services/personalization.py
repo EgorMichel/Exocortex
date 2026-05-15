@@ -12,7 +12,7 @@ from pathlib import Path
 from typing import Any, Optional
 
 from app.agents.insights import Insight, InsightStore, InsightType
-from app.core.models import Edge, EdgeType, Node, Origin, ReviewStatus, TrustStatus
+from app.core.models import Edge, EdgeLayer, EdgeType, Node, Origin, ReviewStatus, TrustStatus
 from app.core.repository import GraphRepository
 
 
@@ -163,6 +163,7 @@ class PersonalizationService:
         insight_id: str,
         action: str | FeedbackAction,
         note: Optional[str] = None,
+        edge_type: Optional[str | EdgeType] = None,
     ) -> InsightFeedback:
         """Record and apply a user reaction to an insight."""
         feedback_action = FeedbackAction(action)
@@ -171,7 +172,7 @@ class PersonalizationService:
             raise ValueError(f"Insight not found: {insight_id}")
 
         self._validate_action(insight.insight_type, feedback_action)
-        effects = self._apply_feedback(insight, feedback_action, note=note)
+        effects = self._apply_feedback(insight, feedback_action, note=note, edge_type=edge_type)
         feedback = InsightFeedback(
             insight_id=insight.id,
             insight_type=insight.insight_type,
@@ -218,13 +219,9 @@ class PersonalizationService:
                 for topic in self._node_topics(node):
                     topic_counts[topic] = topic_counts.get(topic, 0) + weight
 
-        sorted_topics = sorted(
-            (
-                {"topic": topic, "score": score}
-                for topic, score in topic_counts.items()
-                if score > 0
-            ),
-            key=lambda item: item["score"],
+        sorted_topic_items = sorted(
+            ((topic, score) for topic, score in topic_counts.items() if score > 0),
+            key=lambda item: item[1],
             reverse=True,
         )
         return {
@@ -232,7 +229,10 @@ class PersonalizationService:
             "positive_feedback": positive,
             "negative_feedback": negative,
             "action_counts": action_counts,
-            "top_topics": sorted_topics[:10],
+            "top_topics": [
+                {"topic": topic, "score": score}
+                for topic, score in sorted_topic_items[:10]
+            ],
             "node_interactions": node_interactions,
             "message_style": self._message_style(positive, negative),
         }
@@ -273,11 +273,12 @@ class PersonalizationService:
         insight: Insight,
         action: FeedbackAction,
         note: Optional[str],
+        edge_type: Optional[str | EdgeType] = None,
     ) -> list[str]:
         if insight.insight_type == InsightType.CONTRADICTION:
             return self._apply_contradiction_feedback(insight, action, note)
         if insight.insight_type == InsightType.HIDDEN_CONNECTION:
-            return self._apply_connection_feedback(insight, action, note)
+            return self._apply_connection_feedback(insight, action, note, edge_type=edge_type)
         return self._apply_reminder_feedback(insight, action, note)
 
     def _apply_contradiction_feedback(
@@ -286,7 +287,7 @@ class PersonalizationService:
         action: FeedbackAction,
         note: Optional[str],
     ) -> list[str]:
-        effects = []
+        effects: list[str] = []
         nodes = [self.repository.get_node(node_id) for node_id in insight.node_ids[:2]]
         left, right = (nodes + [None, None])[:2]
 
@@ -319,6 +320,7 @@ class PersonalizationService:
                 },
             )
             effects.append(f"contradiction_edge:{edge.id}")
+            effects.extend(self._mark_proposal_review(insight, ReviewStatus.ACCEPTED))
         return effects
 
     def _apply_connection_feedback(
@@ -326,8 +328,9 @@ class PersonalizationService:
         insight: Insight,
         action: FeedbackAction,
         note: Optional[str],
+        edge_type: Optional[str | EdgeType] = None,
     ) -> list[str]:
-        effects = []
+        effects: list[str] = []
         node_ids = insight.node_ids[:2]
         if len(node_ids) < 2:
             return effects
@@ -338,22 +341,30 @@ class PersonalizationService:
             return effects
 
         if action in {FeedbackAction.CONFIRM, FeedbackAction.REFINE}:
+            selected_edge_type = self._selected_edge_type(edge_type)
             for node in (left, right):
                 self._mark_node_interaction(node, action.value, note)
                 effects.append(f"updated_node:{node.id}")
-                node.metadata["pending_connection_review"] = {
+            edge = self._ensure_edge(
+                left.id,
+                right.id,
+                selected_edge_type,
+                weight=max(0.1, insight.score),
+                metadata={
+                    "source": "user_feedback",
                     "insight_id": insight.id,
-                    "other_node_id": right.id if node.id == left.id else left.id,
+                    "proposal_id": insight.metadata.get("proposal_id"),
                     "action": action.value,
                     "note": note,
-                    "reason": "Hidden connection feedback does not create a manual edge without an explicit MVP edge type.",
-                }
-                self.repository.update_node(node)
-            effects.append("manual_edge_not_created:missing_edge_type")
+                },
+            )
+            effects.append(f"manual_edge:{edge.id}")
+            effects.extend(self._mark_proposal_review(insight, ReviewStatus.ACCEPTED))
         else:
             for node in (left, right):
                 self._mark_node_resolution(node, "connection_rejected", note)
                 effects.append(f"marked_node:{node.id}")
+            effects.extend(self._mark_proposal_review(insight, ReviewStatus.REJECTED))
         return effects
 
     def _apply_reminder_feedback(
@@ -417,6 +428,7 @@ class PersonalizationService:
             source_id=source_id,
             target_id=target_id,
             edge_type=edge_type,
+            edge_layer=EdgeLayer.MANUAL,
             weight=weight,
             metadata={key: value for key, value in metadata.items() if value is not None},
             trust_status=TrustStatus.CONFIRMED,
@@ -426,6 +438,24 @@ class PersonalizationService:
         )
         self.repository.add_edge(edge)
         return edge
+
+    def _selected_edge_type(self, edge_type: Optional[str | EdgeType]) -> EdgeType:
+        if edge_type is None:
+            return EdgeType.RELATED_TO
+        if isinstance(edge_type, EdgeType):
+            return edge_type
+        return EdgeType(edge_type)
+
+    def _mark_proposal_review(self, insight: Insight, status: ReviewStatus) -> list[str]:
+        proposal_id = insight.metadata.get("proposal_id")
+        if not proposal_id:
+            return []
+        proposal = self.repository.get_proposal(str(proposal_id))
+        if not proposal:
+            return []
+        proposal.review_status = status
+        self.repository.update_proposal(proposal)
+        return [f"proposal_{status.value}:{proposal.id}"]
 
     def _node_topics(self, node: Node) -> list[str]:
         explicit_topic = node.metadata.get("topic")

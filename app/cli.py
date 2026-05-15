@@ -192,8 +192,10 @@ def _cmd_clear(args: argparse.Namespace) -> int:
     storage_path = Path(settings.storage_path)
     deleted = 0
     for path in (
+        storage_path.with_suffix(".graph.json"),
         storage_path.with_suffix(".gexf"),
         storage_path.with_suffix(".fragments.json"),
+        storage_path.with_suffix(".proposals.json"),
         storage_path.with_suffix(".insights.json"),
         storage_path.with_suffix(".feedback.json"),
         storage_path.with_suffix(".analysis_state.json"),

@@ -31,9 +31,35 @@ class NodeType(Enum):
 
 class EdgeType(Enum):
     """Типы связей между узлами."""
-    USED_IN = "used_in"             # Используется в
-    DERIVED_FROM = "derived_from"   # Следует из / является следствием
+    RELATED_TO = "related_to"       # Связано с
+    SUPPORTS = "supports"           # Подтверждает
     CONTRADICTS = "contradicts"     # Противоречит
+    DERIVED_FROM = "derived_from"   # Следует из / является следствием
+    EXAMPLE_OF = "example_of"       # Является примером
+    CLARIFIES = "clarifies"         # Уточняет
+    USED_IN = "related_to"          # Legacy alias; persisted used_in migrates to related_to.
+
+
+LEGACY_EDGE_TYPE_MAP = {
+    "used_in": EdgeType.RELATED_TO,
+}
+
+
+def coerce_edge_type(value: "EdgeType | str") -> EdgeType:
+    """Normalize legacy edge type values to the current MVP vocabulary."""
+    if isinstance(value, EdgeType):
+        return value
+    normalized = str(value).strip()
+    if normalized in LEGACY_EDGE_TYPE_MAP:
+        return LEGACY_EDGE_TYPE_MAP[normalized]
+    return EdgeType(normalized)
+
+
+class EdgeLayer(Enum):
+    """Слой связи: пользовательский смысл, служебный расчёт или предложение."""
+    MANUAL = "manual"
+    SERVICE = "service"
+    SUGGESTED = "suggested"
 
 
 class TrustStatus(Enum):
@@ -59,6 +85,15 @@ class ReviewStatus(Enum):
     ACCEPTED = "accepted"
     REJECTED = "rejected"
     EDITED = "edited"
+
+
+class ProposalType(Enum):
+    """Типы предложений, создаваемых агентом."""
+    PROPOSED_EDGE = "proposed_edge"
+    PROPOSED_TAG = "proposed_tag"
+    POSSIBLE_DUPLICATE = "possible_duplicate"
+    POSSIBLE_CONTRADICTION = "possible_contradiction"
+    REMINDER = "reminder"
 
 
 PROVENANCE_FIELDS = (
@@ -220,6 +255,8 @@ class Node:
     content: str
     node_type: NodeType = NodeType.FACT
     id: str = field(default_factory=lambda: str(uuid.uuid4()))
+    user_id: str = "local"
+    graph_id: str = "default"
     source_text: Optional[str] = None
     metadata: Dict[str, Any] = field(default_factory=dict)
     provenance: Optional[SourceProvenance] = None
@@ -297,6 +334,8 @@ class Node:
         self._sync_standard_metadata()
         return {
             'id': self.id,
+            'user_id': self.user_id,
+            'graph_id': self.graph_id,
             'node_type': self.node_type.value,
             'content': self.content,
             'source_text': self.source_text or '',
@@ -322,6 +361,8 @@ class Node:
         data.pop('label', None)
 
         data['source_text'] = data.get('source_text') or None
+        data['user_id'] = data.get('user_id') or 'local'
+        data['graph_id'] = data.get('graph_id') or 'default'
         data['node_type'] = NodeType(data['node_type'])
         data['metadata'] = json.loads(data['metadata']) if isinstance(data.get('metadata'), str) else data.get('metadata', {})
         provenance_data = data.get('provenance')
@@ -388,9 +429,12 @@ class Edge:
     """
     source_id: str
     target_id: str
-    edge_type: EdgeType = EdgeType.USED_IN
+    edge_type: EdgeType = EdgeType.RELATED_TO
+    edge_layer: EdgeLayer = EdgeLayer.MANUAL
     weight: float = 1.0
     id: str = field(default_factory=lambda: str(uuid.uuid4()))
+    user_id: str = "local"
+    graph_id: str = "default"
     metadata: Dict[str, Any] = field(default_factory=dict)
     trust_status: TrustStatus = TrustStatus.CONFIRMED
     origin: Origin = Origin.USER
@@ -407,8 +451,12 @@ class Edge:
             self.review_status = self.metadata['review_status']
         if self.user_comment is None and self.metadata.get('user_comment'):
             self.user_comment = self.metadata['user_comment']
+        if self.edge_layer == EdgeLayer.MANUAL and self.metadata.get('edge_layer'):
+            self.edge_layer = self.metadata['edge_layer']
         if isinstance(self.edge_type, str):
-            self.edge_type = EdgeType(self.edge_type)
+            self.edge_type = coerce_edge_type(self.edge_type)
+        if isinstance(self.edge_layer, str):
+            self.edge_layer = EdgeLayer(self.edge_layer)
         if isinstance(self.trust_status, str):
             self.trust_status = TrustStatus(self.trust_status)
         if isinstance(self.origin, str):
@@ -423,15 +471,19 @@ class Edge:
         self.metadata['origin'] = self.origin.value
         self.metadata['review_status'] = self.review_status.value
         self.metadata['user_comment'] = self.user_comment
+        self.metadata['edge_layer'] = self.edge_layer.value
     
     def to_dict(self) -> Dict[str, Any]:
         """Сериализация связи в словарь."""
         self._sync_standard_metadata()
         return {
             'id': self.id,
+            'user_id': self.user_id,
+            'graph_id': self.graph_id,
             'source_id': self.source_id,
             'target_id': self.target_id,
             'edge_type': self.edge_type.value,
+            'edge_layer': self.edge_layer.value,
             'weight': self.weight,
             'metadata': json.dumps(self.metadata),  # Сериализуем dict как JSON string
             'trust_status': self.trust_status.value,
@@ -445,8 +497,11 @@ class Edge:
     def from_dict(cls, data: Dict[str, Any]) -> 'Edge':
         """Десериализация связи из словаря."""
         data = data.copy()
-        data['edge_type'] = EdgeType(data['edge_type'])
+        data['user_id'] = data.get('user_id') or 'local'
+        data['graph_id'] = data.get('graph_id') or 'default'
+        data['edge_type'] = coerce_edge_type(data['edge_type'])
         data['metadata'] = json.loads(data['metadata']) if isinstance(data.get('metadata'), str) else data.get('metadata', {})
+        data['edge_layer'] = EdgeLayer(data.get('edge_layer') or data['metadata'].get('edge_layer') or EdgeLayer.MANUAL.value)
         data['trust_status'] = TrustStatus(data.get('trust_status') or data['metadata'].get('trust_status') or TrustStatus.CONFIRMED.value)
         data['origin'] = Origin(data.get('origin') or data['metadata'].get('origin') or Origin.USER.value)
         data['review_status'] = ReviewStatus(data.get('review_status') or data['metadata'].get('review_status') or ReviewStatus.ACCEPTED.value)
@@ -474,18 +529,28 @@ class KnowledgeFragment:
     content: str
     source_type: str = 'manual'
     id: str = field(default_factory=lambda: str(uuid.uuid4()))
+    user_id: str = "local"
+    graph_id: str = "default"
     source_url: Optional[str] = None
     extracted_nodes: list[str] = field(default_factory=list)
+    llm_status: str = "skipped"
+    warnings: list[str] = field(default_factory=list)
+    errors: list[str] = field(default_factory=list)
     created_at: datetime = field(default_factory=utc_now)
     
     def to_dict(self) -> Dict[str, Any]:
         """Сериализация фрагмента в словарь."""
         return {
             'id': self.id,
+            'user_id': self.user_id,
+            'graph_id': self.graph_id,
             'content': self.content,
             'source_type': self.source_type,
             'source_url': self.source_url,
             'extracted_nodes': self.extracted_nodes,
+            'llm_status': self.llm_status,
+            'warnings': self.warnings,
+            'errors': self.errors,
             'created_at': self.created_at.isoformat()
         }
     
@@ -493,5 +558,64 @@ class KnowledgeFragment:
     def from_dict(cls, data: Dict[str, Any]) -> 'KnowledgeFragment':
         """Десериализация фрагмента из словаря."""
         data = data.copy()
+        data['user_id'] = data.get('user_id') or 'local'
+        data['graph_id'] = data.get('graph_id') or 'default'
+        data['llm_status'] = data.get('llm_status') or 'skipped'
+        data['warnings'] = data.get('warnings') or []
+        data['errors'] = data.get('errors') or []
         data['created_at'] = datetime.fromisoformat(data['created_at'])
         return cls(**data)
+
+
+@dataclass
+class AgentProposal:
+    """A reviewable suggestion produced by an agent or service."""
+    proposal_type: ProposalType
+    node_ids: list[str] = field(default_factory=list)
+    edge_ids: list[str] = field(default_factory=list)
+    payload: Dict[str, Any] = field(default_factory=dict)
+    score: float = 0.0
+    origin: Origin = Origin.AGENT
+    review_status: ReviewStatus = ReviewStatus.PENDING
+    id: str = field(default_factory=lambda: str(uuid.uuid4()))
+    user_id: str = "local"
+    graph_id: str = "default"
+    created_at: datetime = field(default_factory=utc_now)
+
+    def __post_init__(self) -> None:
+        if isinstance(self.proposal_type, str):
+            self.proposal_type = ProposalType(self.proposal_type)
+        if isinstance(self.origin, str):
+            self.origin = Origin(self.origin)
+        if isinstance(self.review_status, str):
+            self.review_status = ReviewStatus(self.review_status)
+        self.node_ids = [str(node_id) for node_id in self.node_ids]
+        self.edge_ids = [str(edge_id) for edge_id in self.edge_ids]
+
+    def to_dict(self) -> Dict[str, Any]:
+        """Serialize a proposal to a JSON-compatible dictionary."""
+        return {
+            'id': self.id,
+            'user_id': self.user_id,
+            'graph_id': self.graph_id,
+            'proposal_type': self.proposal_type.value,
+            'node_ids': self.node_ids,
+            'edge_ids': self.edge_ids,
+            'payload': self.payload,
+            'score': self.score,
+            'origin': self.origin.value,
+            'review_status': self.review_status.value,
+            'created_at': self.created_at.isoformat(),
+        }
+
+    @classmethod
+    def from_dict(cls, data: Dict[str, Any]) -> 'AgentProposal':
+        """Deserialize a proposal from a dictionary."""
+        values = data.copy()
+        values['user_id'] = values.get('user_id') or 'local'
+        values['graph_id'] = values.get('graph_id') or 'default'
+        values['proposal_type'] = ProposalType(values['proposal_type'])
+        values['origin'] = Origin(values.get('origin') or Origin.AGENT.value)
+        values['review_status'] = ReviewStatus(values.get('review_status') or ReviewStatus.PENDING.value)
+        values['created_at'] = datetime.fromisoformat(values['created_at'])
+        return cls(**values)

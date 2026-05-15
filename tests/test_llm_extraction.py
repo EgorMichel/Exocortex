@@ -69,9 +69,11 @@ class TestLLMExtraction:
         assert "must be written in Russian" in prompt
         assert "source text language" in prompt
         assert "Write all facts, names, descriptions, comments, and summaries in Russian" in prompt
-        assert "idea|fact|quote|question|conclusion|source" in prompt
-        assert "used_in|derived_from|contradicts" in prompt
-        assert "related_to" not in prompt
+        assert "idea|fact|quote|question|conclusion" in prompt
+        assert "source" not in "idea|fact|quote|question|conclusion"
+        assert "related_to|supports|contradicts|derived_from|example_of|clarifies" in prompt
+        assert "Never create source entities" in prompt
+        assert "used_in" not in prompt
         assert "similar_to" not in prompt
 
     def test_extract_knowledge_system_message_requires_russian_output(self):
@@ -172,6 +174,38 @@ class TestLLMExtraction:
         assert 'source' in nodes[0].metadata
         assert nodes[0].metadata['source'] == fragment.id
 
+    def test_extraction_result_skips_automatic_source_nodes(self):
+        """LLM/capture extraction cannot put provenance sources into knowledge nodes."""
+        service = LLMService(api_key=None)
+        fragment = KnowledgeFragment(content="Тестовый текст", source_type="test")
+        result = ExtractionResult(
+            entities=[
+                ExtractedEntity(
+                    name="Статья",
+                    type="source",
+                    description="Описание источника",
+                ),
+                ExtractedEntity(
+                    name="Факт",
+                    type="fact",
+                    description="Извлечённый факт",
+                ),
+            ],
+            relations=[
+                ExtractedRelation(
+                    source="Статья",
+                    target="Факт",
+                    type="related_to",
+                )
+            ],
+        )
+
+        nodes, edges = service.extraction_result_to_graph_elements(result, fragment)
+
+        assert len(nodes) == 1
+        assert nodes[0].node_type == NodeType.FACT
+        assert edges == []
+
     def test_coerce_extraction_result_skips_malformed_items(self):
         """Некорректные элементы ответа LLM не ломают весь результат."""
         service = LLMService(api_key=None)
@@ -191,7 +225,7 @@ class TestLLMExtraction:
                 {
                     "source": "Python",
                     "target": "Data analysis",
-                    "type": "used_in",
+                    "type": "related_to",
                     "description": "Python is used for data analysis",
                     "confidence": 0.8,
                 },
@@ -304,6 +338,8 @@ class TestLLMExtraction:
 
         assert fragment.id is not None
         assert fragment.extracted_nodes == []
+        assert fragment.llm_status == "skipped"
+        assert fragment.warnings
         assert repository.get_all_nodes() == []
         assert repository.get_stats()['total_fragments'] == 1
 

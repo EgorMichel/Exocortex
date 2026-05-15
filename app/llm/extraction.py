@@ -12,13 +12,24 @@ from typing import List, Dict, Any, Optional, Tuple
 from pydantic import BaseModel, Field, ValidationError
 import os
 
-from app.core.models import Edge, EdgeType, KnowledgeFragment, Node, NodeType, Origin, ReviewStatus, TrustStatus
+from app.core.models import (
+    Edge,
+    EdgeLayer,
+    EdgeType,
+    KnowledgeFragment,
+    Node,
+    NodeType,
+    Origin,
+    ReviewStatus,
+    TrustStatus,
+    coerce_edge_type,
+)
 
 
 class ExtractedEntity(BaseModel):
     """Сущность, извлечённая из текста."""
     name: str = Field(description="Название сущности")
-    type: str = Field(description="Тип сущности: idea, fact, quote, question, conclusion, source")
+    type: str = Field(description="Тип сущности: idea, fact, quote, question, conclusion")
     description: str = Field(description="Описание или содержание сущности")
     confidence: float = Field(default=1.0, description="Уверенность в извлечении (0-1)")
 
@@ -27,7 +38,7 @@ class ExtractedRelation(BaseModel):
     """Связь между сущностями."""
     source: str = Field(description="Название исходной сущности")
     target: str = Field(description="Название целевой сущности")
-    type: str = Field(description="Тип связи: used_in, derived_from, contradicts")
+    type: str = Field(description="Тип связи: related_to, supports, contradicts, derived_from, example_of, clarifies")
     description: str = Field(default="", description="Описание связи")
     confidence: float = Field(default=1.0, description="Уверенность в связи (0-1)")
 
@@ -63,14 +74,15 @@ class LLMService:
             model: Название модели для использования
             base_url: OpenAI-compatible API base URL
         """
-        self.provider = (provider or os.getenv("LLM_PROVIDER", "openai")).strip().lower()
+        provider_value = provider or os.getenv("LLM_PROVIDER") or "openai"
+        self.provider: str = provider_value.strip().lower()
         if self.provider == "local":
             self.provider = "ollama"
 
         if self.provider == "ollama":
-            self.api_key = api_key or os.getenv("LLM_API_KEY") or "ollama"
-            self.model = model or os.getenv("LLM_MODEL") or os.getenv("OLLAMA_MODEL") or "llama3.1"
-            self.base_url = self._normalize_ollama_base_url(
+            self.api_key: Optional[str] = api_key or os.getenv("LLM_API_KEY") or "ollama"
+            self.model: str = model or os.getenv("LLM_MODEL") or os.getenv("OLLAMA_MODEL") or "llama3.1"
+            self.base_url: Optional[str] = self._normalize_ollama_base_url(
                 base_url
                 or os.getenv("LLM_API_BASE")
                 or os.getenv("OLLAMA_BASE_URL")
@@ -78,15 +90,18 @@ class LLMService:
             )
         else:
             self.api_key = api_key or os.getenv("LLM_API_KEY") or os.getenv("OPENAI_API_KEY")
-            self.model = model or os.getenv("LLM_MODEL", "gpt-4o-mini")
+            self.model = model or os.getenv("LLM_MODEL") or "gpt-4o-mini"
             self.base_url = base_url or os.getenv("LLM_API_BASE") or os.getenv("OPENAI_API_BASE")
         self.client = None
+        self.last_status = "skipped"
+        self.last_warnings: list[str] = []
+        self.last_errors: list[str] = []
         
         if self.api_key:
             try:
                 from openai import AsyncOpenAI
 
-                client_kwargs = {"api_key": self.api_key}
+                client_kwargs: Dict[str, Any] = {"api_key": self.api_key}
                 if self.base_url:
                     client_kwargs["base_url"] = self.base_url
                 self.client = AsyncOpenAI(**client_kwargs)
@@ -104,8 +119,8 @@ class LLMService:
         """Создать промпт для извлечения сущностей и связей."""
         return f"""
 You are a knowledge extraction assistant. Analyze the following text and extract:
-1. Key entities (ideas, facts, quotes, questions, conclusions, sources)
-2. Manual logical relationships between these entities
+1. Key knowledge entities (ideas, facts, quotes, questions, conclusions)
+2. Explicit logical relationships between these entities
 
 All human-readable JSON values must be written in Russian, regardless of the
 source text language. This includes entity names, entity descriptions, relation
@@ -120,7 +135,7 @@ Extract entities and relationships in JSON format with this exact structure:
     "entities": [
         {{
             "name": "entity name",
-            "type": "idea|fact|quote|question|conclusion|source",
+            "type": "idea|fact|quote|question|conclusion",
             "description": "detailed description of the entity",
             "confidence": 0.95
         }}
@@ -129,7 +144,7 @@ Extract entities and relationships in JSON format with this exact structure:
         {{
             "source": "source entity name",
             "target": "target entity name",
-            "type": "used_in|derived_from|contradicts",
+            "type": "related_to|supports|contradicts|derived_from|example_of|clarifies",
             "description": "description of the relationship",
             "confidence": 0.9
         }}
@@ -140,9 +155,13 @@ Extract entities and relationships in JSON format with this exact structure:
 Rules:
 - Extract only meaningful, standalone entities
 - Use only the listed node and relationship enum values
+- Never create source entities; sources belong to provenance/context metadata, not to the knowledge graph
 - Do not use generic relatedness or similarity as a manual relationship
+- Use related_to only when the text explicitly says two entities are connected but gives no more specific relation
+- Use supports when one statement confirms or backs another
 - Use derived_from only when the source-target direction is clear: source follows from target
-- Use used_in only when one item is explicitly used in another item
+- Use example_of when one item is an example of another
+- Use clarifies when one item narrows or explains another
 - Use contradicts only for actual contradictions
 - Don't create duplicate entities
 - Only create relationships that are explicitly stated or strongly implied
@@ -165,6 +184,9 @@ Respond in JSON format only.
         """
         if not self.client:
             print("LLM extraction skipped: no LLM client configured.")
+            self.last_status = "skipped"
+            self.last_warnings = ["LLM client is not configured."]
+            self.last_errors = []
             return ExtractionResult()
         
         try:
@@ -201,10 +223,17 @@ Respond in JSON format only.
             
             # Парсим JSON ответ
             result_data = self._parse_json_response(result_text)
-            return self._coerce_extraction_result(result_data)
+            result = self._coerce_extraction_result(result_data)
+            self.last_status = "succeeded"
+            self.last_warnings = []
+            self.last_errors = []
+            return result
             
         except Exception as e:
             print(f"Error during LLM extraction: {e}")
+            self.last_status = "failed"
+            self.last_warnings = []
+            self.last_errors = [str(e)]
             return ExtractionResult()
 
     def _parse_json_response(self, result_text: str) -> Dict[str, Any]:
@@ -274,7 +303,16 @@ Respond in JSON format only.
         
         # Создаём узлы
         for entity in result.entities:
-            node_type = NodeType(entity.type) if entity.type in [t.value for t in NodeType] else NodeType.FACT
+            if entity.type == NodeType.SOURCE.value:
+                continue
+            knowledge_types = {
+                NodeType.IDEA.value,
+                NodeType.FACT.value,
+                NodeType.QUOTE.value,
+                NodeType.QUESTION.value,
+                NodeType.CONCLUSION.value,
+            }
+            node_type = NodeType(entity.type) if entity.type in knowledge_types else NodeType.FACT
             
             node = Node(
                 content=entity.description,
@@ -303,14 +341,16 @@ Respond in JSON format only.
             if not source_id or not target_id:
                 continue
             
-            if relation.type not in [t.value for t in EdgeType]:
+            try:
+                edge_type = coerce_edge_type(relation.type)
+            except ValueError:
                 continue
-            edge_type = EdgeType(relation.type)
             
             edge = Edge(
                 source_id=source_id,
                 target_id=target_id,
                 edge_type=edge_type,
+                edge_layer=EdgeLayer.SUGGESTED,
                 weight=relation.confidence,
                 metadata={
                     'description': relation.description,
@@ -359,9 +399,14 @@ async def extract_and_store(
     
     # Извлекаем знания
     extraction_result = await llm_service.extract_knowledge(text)
+    fragment.llm_status = getattr(llm_service, "last_status", "skipped")
+    fragment.warnings = list(getattr(llm_service, "last_warnings", []) or [])
+    fragment.errors = list(getattr(llm_service, "last_errors", []) or [])
     
     # Конвертируем в узлы и связи
     nodes, edges = llm_service.extraction_result_to_graph_elements(extraction_result, fragment)
+    if fragment.llm_status == "succeeded" and not nodes:
+        fragment.warnings.append("LLM succeeded but produced no accepted knowledge nodes.")
     
     # Сохраняем в граф
     for node in nodes:
