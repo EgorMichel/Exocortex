@@ -32,6 +32,22 @@
   - Отклонение предложения сохраняет feedback в payload и metadata связанных узлов для будущей персонализации
   - `/graph` показывает pending suggestions для выбранного узла, умеет генерировать, принимать и отклонять предложения
   - После ручного создания узла в `/graph` предложения генерируются сразу и попадают в review flow
+- **MVP 2 Этап 5: служебные связи и визуальное разделение слоев**:
+  - `GET /api/edges` получил фильтр `edge_layer=manual|service|suggested`
+  - `/graph` получил фильтры связей по слою `Manual`, `Service`, `Suggested`
+  - Служебные и suggested-связи остаются визуально отделенными от ручного смыслового слоя
+- **MVP 2 Этап 6: Review/Suggestions queue**:
+  - `/app` переосмыслен как экран `Exocortex Review`, объединяющий suggestions и agent insights
+  - Добавлен единый endpoint `GET /api/review` с `item_type`, `review_kind`, `status`, `payload` и `open_graph_url`
+  - Добавлены review aliases для suggestions: accept, reject, defer
+  - Добавлены review aliases для insights: react и defer
+  - Review UI показывает `Suggestion`/`AgentProposal` и `Insight` в одной очереди
+  - Suggestions можно принять, отклонить, отложить, открыть в графе и принять после редактирования JSON payload
+  - Добавлен специализированный contradiction review endpoint `POST /api/review/contradictions/{item_id}/resolve`
+  - Contradiction review поддерживает решения `choose_left`, `choose_right`, `keep_both`, `resolved`, `reject`, `defer`
+  - Review UI показывает contradiction items как A/B-сравнение утверждений
+  - Для suggestions добавлен durable `review_status=deferred`; deferred items можно вернуть через `include_deferred=true`
+  - `/graph` умеет открываться с выбранным узлом через `?node_id=...`
 - **Запуск приложения**:
   - Точка входа `python -m app.main` для FastAPI-сервера
   - CLI `python -m app.cli` с командами `add`, `stats`, `list`, `search`, `forgotten`, `clear`
@@ -120,7 +136,7 @@
   - Тесты оптимизированного анализа: переиспользование candidate pairs, ранний skip без LLM-клиента, батчинг противоречий и пропуск неизменившихся пар
   - Тесты ручных мыслей с `source_text`, reader UI и повторного анализа при изменении источника
   - Тесты ручного создания/редактирования узлов и связей, reader tags/defaults и отказа от legacy-типов
-  - Текущий набор: 108 автоматических тестов
+  - Текущий набор: 111 автоматических тестов
 
 ### Изменено
 - **Breaking change / MVP data model**: Ручные связи приведены к MVP-набору `used_in`, `derived_from`, `contradicts`; legacy-типы вроде `related_to`, `supports`, `example_of`, `part_of` и `similar_to` больше не являются валидными.

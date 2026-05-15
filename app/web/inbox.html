@@ -346,6 +346,34 @@
       flex-wrap: wrap;
     }
 
+    .comparison {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 10px;
+    }
+
+    .statement {
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: var(--metric-bg);
+      padding: 10px;
+    }
+
+    .statement span {
+      display: block;
+      color: var(--muted);
+      font-size: 12px;
+      font-weight: 650;
+      margin-bottom: 6px;
+      text-transform: uppercase;
+    }
+
+    .statement p {
+      margin: 0;
+      color: var(--description);
+      line-height: 1.4;
+    }
+
     .note {
       flex: 1 1 220px;
       min-height: 36px;
@@ -447,6 +475,7 @@
 
     @media (max-width: 520px) {
       .profile-grid,
+      .comparison,
       .segmented {
         grid-template-columns: 1fr;
       }
@@ -628,6 +657,43 @@
       }
     }
 
+    function renderContradictionComparison(item) {
+      if (item.review_kind !== "contradiction") {
+        return "";
+      }
+      const data = item.review_data || {};
+      const left = data.statement_a || data.nodes?.[0]?.content || "";
+      const right = data.statement_b || data.nodes?.[1]?.content || "";
+      return `
+        <div class="comparison">
+          <div class="statement">
+            <span>A</span>
+            <p>${escapeHtml(left || "No statement")}</p>
+          </div>
+          <div class="statement">
+            <span>B</span>
+            <p>${escapeHtml(right || "No statement")}</p>
+          </div>
+        </div>
+      `;
+    }
+
+    function contradictionButtons(item, disabled) {
+      if (item.review_kind !== "contradiction") {
+        return "";
+      }
+      return [
+        ["choose_left", "Choose A"],
+        ["choose_right", "Choose B"],
+        ["keep_both", "Keep Both"],
+        ["resolved", "Resolved"],
+        ["reject", "Reject"],
+        ["defer", "Defer"],
+      ].map(([action, label]) => (
+        `<button type="button" data-contradiction="${escapeHtml(item.id)}" data-item-type="${escapeHtml(item.item_type)}" data-action="${action}" ${disabled ? "disabled" : ""}>${label}</button>`
+      )).join("");
+    }
+
     function renderReviewItems(items) {
       if (!items.length) {
         inbox.innerHTML = '<div class="empty">No review items.</div>';
@@ -638,7 +704,10 @@
         const isSuggestion = item.item_type === "suggestion";
         const isReviewed = item.status !== "pending" && item.status !== "deferred";
         const insightActions = actionsByType[item.review_kind] || [];
-        const buttons = isSuggestion
+        const isContradiction = item.review_kind === "contradiction";
+        const buttons = isContradiction
+          ? contradictionButtons(item, isReviewed)
+          : isSuggestion
           ? [
             ["accept", "Accept"],
             ["reject", "Reject"],
@@ -658,6 +727,7 @@
         const payloadEditor = isSuggestion
           ? `<textarea class="note payload-editor" rows="4" data-payload="${escapeHtml(item.id)}" spellcheck="false">${escapeHtml(payloadText(item))}</textarea>`
           : "";
+        const comparison = renderContradictionComparison(item);
 
         return `
           <article class="card">
@@ -672,6 +742,7 @@
             </div>
             <h3>${escapeHtml(item.title)}</h3>
             <p class="description">${escapeHtml(item.description)}</p>
+            ${comparison}
             <div class="actions">
               ${payloadEditor}
               <textarea class="note" rows="1" data-note="${escapeHtml(item.id)}" placeholder="Note"></textarea>
@@ -761,6 +832,26 @@
       }
     }
 
+    async function resolveContradiction(itemId, itemType, action) {
+      const note = document.querySelector(`[data-note="${CSS.escape(itemId)}"]`)?.value.trim() || null;
+      try {
+        await requestJson(`/api/review/contradictions/${encodeURIComponent(itemId)}/resolve`, {
+          method: "POST",
+          body: JSON.stringify({
+            item_type: itemType,
+            action,
+            note,
+            payload: itemType === "suggestion" && !["reject", "defer"].includes(action)
+              ? editedPayload(itemId)
+              : {},
+          }),
+        });
+        await load();
+      } catch (error) {
+        setMessage(error.message, "error");
+      }
+    }
+
     inbox.addEventListener("click", (event) => {
       const graphButton = event.target.closest("button[data-open-graph]");
       if (graphButton) {
@@ -770,6 +861,15 @@
       const suggestionButton = event.target.closest("button[data-suggestion]");
       if (suggestionButton) {
         reactToSuggestion(suggestionButton.dataset.suggestion, suggestionButton.dataset.action);
+        return;
+      }
+      const contradictionButton = event.target.closest("button[data-contradiction]");
+      if (contradictionButton) {
+        resolveContradiction(
+          contradictionButton.dataset.contradiction,
+          contradictionButton.dataset.itemType,
+          contradictionButton.dataset.action
+        );
         return;
       }
       const button = event.target.closest("button[data-insight]");

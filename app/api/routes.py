@@ -333,6 +333,14 @@ class SuggestionDecisionRequest(BaseModel):
     payload: Dict[str, Any] = Field(default_factory=dict, description="Отредактированные значения перед accept")
 
 
+class ContradictionDecisionRequest(BaseModel):
+    """Специализированное решение по contradiction review item."""
+    item_type: str = Field(default="insight", description="insight или suggestion")
+    action: str = Field(..., description="choose_left, choose_right, keep_both, resolved, reject, defer")
+    note: Optional[str] = None
+    payload: Dict[str, Any] = Field(default_factory=dict)
+
+
 class ReviewItemResponse(BaseModel):
     """Единый элемент очереди Review: suggestion или insight."""
     id: str
@@ -343,6 +351,7 @@ class ReviewItemResponse(BaseModel):
     node_ids: List[str]
     edge_ids: List[str]
     payload: Dict[str, Any] = Field(default_factory=dict)
+    review_data: Dict[str, Any] = Field(default_factory=dict)
     score: float
     origin: str
     status: str
@@ -535,7 +544,11 @@ def _open_graph_url(node_ids: List[str]) -> Optional[str]:
 
 
 def _is_deferred_suggestion(proposal: AgentProposal) -> bool:
-    return bool(proposal.payload.get("review_deferred"))
+    return proposal.review_status == ReviewStatus.DEFERRED or bool(proposal.payload.get("review_deferred"))
+
+
+def _is_actionable_suggestion(proposal: AgentProposal) -> bool:
+    return proposal.review_status in {ReviewStatus.PENDING, ReviewStatus.DEFERRED}
 
 
 def _suggestion_review_title(proposal: AgentProposal) -> str:
@@ -578,8 +591,41 @@ def _suggestion_review_description(repository: GraphRepository, proposal: AgentP
     return " | ".join(parts) or "Review this suggestion before it changes the graph."
 
 
+def _nodes_review_data(repository: GraphRepository, node_ids: List[str]) -> list[dict[str, Any]]:
+    nodes = []
+    for node_id in node_ids:
+        node = repository.get_node(node_id)
+        if not node:
+            continue
+        nodes.append({
+            "id": node.id,
+            "title": _node_label(node),
+            "content": node.content,
+            "node_type": node.node_type.value,
+            "source_text": node.source_text,
+        })
+    return nodes
+
+
+def _contradiction_review_data(repository: GraphRepository, node_ids: List[str], payload: Dict[str, Any]) -> Dict[str, Any]:
+    nodes = _nodes_review_data(repository, node_ids[:2])
+    statement_a = payload.get("statement_a") or (nodes[0]["content"] if len(nodes) > 0 else None)
+    statement_b = payload.get("statement_b") or (nodes[1]["content"] if len(nodes) > 1 else None)
+    return {
+        "nodes": nodes,
+        "statement_a": statement_a,
+        "statement_b": statement_b,
+        "resolution_actions": ["choose_left", "choose_right", "keep_both", "resolved", "reject", "defer"],
+    }
+
+
 def _review_item_from_suggestion(repository: GraphRepository, proposal: AgentProposal) -> ReviewItemResponse:
-    status = "deferred" if proposal.review_status == ReviewStatus.PENDING and _is_deferred_suggestion(proposal) else proposal.review_status.value
+    status = "deferred" if _is_deferred_suggestion(proposal) else proposal.review_status.value
+    review_data = (
+        _contradiction_review_data(repository, proposal.node_ids, proposal.payload)
+        if _suggestion_type(proposal) == ProposalType.CONTRADICTION.value
+        else {}
+    )
     return ReviewItemResponse(
         id=proposal.id,
         item_type="suggestion",
@@ -589,6 +635,7 @@ def _review_item_from_suggestion(repository: GraphRepository, proposal: AgentPro
         node_ids=proposal.node_ids,
         edge_ids=proposal.edge_ids,
         payload=proposal.payload,
+        review_data=review_data,
         score=proposal.score,
         origin=proposal.origin.value,
         status=status,
@@ -601,6 +648,11 @@ def _review_item_from_suggestion(repository: GraphRepository, proposal: AgentPro
 def _review_item_from_inbox_item(item: InboxItem) -> ReviewItemResponse:
     insight = item.insight
     status = item.feedback.action.value if item.feedback else "pending"
+    review_data = (
+        _contradiction_review_data(get_repository(), insight.node_ids, insight.metadata)
+        if insight.insight_type.value == ProposalType.CONTRADICTION.value
+        else {}
+    )
     return ReviewItemResponse(
         id=insight.id,
         item_type="insight",
@@ -610,6 +662,7 @@ def _review_item_from_inbox_item(item: InboxItem) -> ReviewItemResponse:
         node_ids=insight.node_ids,
         edge_ids=insight.edge_ids,
         payload=insight.metadata,
+        review_data=review_data,
         score=insight.score,
         origin="agent",
         status=status,
@@ -1038,6 +1091,8 @@ def _accept_suggestion(repository: GraphRepository, proposal: AgentProposal, edi
                 "suggested_by": payload.get("suggested_by") or proposal.origin.value,
                 "suggestion_id": proposal.id,
                 "review_source": "suggestion_accept",
+                "resolution": payload.get("resolution"),
+                "chosen_node_id": payload.get("chosen_node_id"),
             },
             trust_status=TrustStatus.CONFIRMED,
             origin=Origin.USER,
@@ -1096,7 +1151,7 @@ def _accept_suggestion_by_id(
     proposal = repository.get_proposal(suggestion_id)
     if not proposal:
         raise HTTPException(status_code=404, detail="Suggestion not found")
-    if proposal.review_status != ReviewStatus.PENDING:
+    if not _is_actionable_suggestion(proposal):
         raise HTTPException(status_code=400, detail="Suggestion is already reviewed")
     try:
         effects = _accept_suggestion(repository, proposal, request.payload)
@@ -1119,7 +1174,7 @@ def _reject_suggestion_by_id(
     proposal = repository.get_proposal(suggestion_id)
     if not proposal:
         raise HTTPException(status_code=404, detail="Suggestion not found")
-    if proposal.review_status != ReviewStatus.PENDING:
+    if not _is_actionable_suggestion(proposal):
         raise HTTPException(status_code=400, detail="Suggestion is already reviewed")
     if request.note:
         proposal.payload["rejection_note"] = request.note.strip()
@@ -1141,7 +1196,7 @@ def _defer_suggestion_by_id(
     proposal = repository.get_proposal(suggestion_id)
     if not proposal:
         raise HTTPException(status_code=404, detail="Suggestion not found")
-    if proposal.review_status != ReviewStatus.PENDING:
+    if not _is_actionable_suggestion(proposal):
         raise HTTPException(status_code=400, detail="Suggestion is already reviewed")
     proposal.payload["review_deferred"] = True
     proposal.payload["review_deferred_at"] = utc_now().isoformat()
@@ -1149,10 +1204,28 @@ def _defer_suggestion_by_id(
         proposal.payload["defer_note"] = request.note.strip()
     if request.payload:
         proposal.payload["defer_feedback"] = request.payload
+    proposal.review_status = ReviewStatus.DEFERRED
     repository.update_proposal(proposal)
     if repository.storage_path:
         repository.save()
     return proposal, [f"suggestion_deferred:{proposal.id}"]
+
+
+def _contradiction_payload_for_action(
+    proposal: AgentProposal,
+    action: str,
+    request: ContradictionDecisionRequest,
+) -> Dict[str, Any]:
+    payload = dict(request.payload)
+    payload["resolution"] = action
+    if action == "choose_left" and proposal.node_ids:
+        payload["chosen_node_id"] = proposal.node_ids[0]
+    elif action == "choose_right" and len(proposal.node_ids) > 1:
+        payload["chosen_node_id"] = proposal.node_ids[1]
+    payload.setdefault("edge_type", EdgeType.CONTRADICTS.value)
+    if request.note:
+        payload["user_comment"] = request.note
+    return payload
 
 
 def _clean_tags(tags: Optional[List[str]]) -> List[str]:
@@ -1579,8 +1652,8 @@ async def get_review_queue(
 
     for suggestion in repository.get_all_proposals():
         is_deferred = _is_deferred_suggestion(suggestion)
-        is_pending = suggestion.review_status == ReviewStatus.PENDING
-        if not include_reacted and not is_pending:
+        is_actionable = _is_actionable_suggestion(suggestion)
+        if not include_reacted and not is_actionable:
             continue
         if is_deferred and not include_deferred:
             continue
@@ -1931,6 +2004,42 @@ async def review_defer_insight(insight_id: str, request: SuggestionDecisionReque
         note=request.note,
     )
     return await react_to_insight(insight_id, defer_request)
+
+
+@app.post("/api/review/contradictions/{item_id}/resolve")
+async def review_resolve_contradiction(item_id: str, request: ContradictionDecisionRequest):
+    """Специализированный contradiction flow для выбора A/B, keep both, resolved, reject или defer."""
+    action = request.action.strip()
+    if action not in {"choose_left", "choose_right", "keep_both", "resolved", "reject", "defer"}:
+        raise HTTPException(status_code=400, detail=f"Invalid contradiction action: {request.action}")
+
+    if request.item_type == "insight":
+        feedback_request = InsightFeedbackRequest(action=action, note=request.note)
+        feedback = await react_to_insight(item_id, feedback_request)
+        return {"item_type": "insight", "feedback": feedback}
+
+    if request.item_type != "suggestion":
+        raise HTTPException(status_code=400, detail=f"Invalid item_type: {request.item_type}")
+
+    repository = get_repository()
+    proposal = repository.get_proposal(item_id)
+    if not proposal:
+        raise HTTPException(status_code=404, detail="Suggestion not found")
+    if _suggestion_type(proposal) != ProposalType.CONTRADICTION.value:
+        raise HTTPException(status_code=400, detail="Suggestion is not a contradiction")
+
+    decision = SuggestionDecisionRequest(note=request.note, payload=request.payload)
+    if action == "reject":
+        proposal, effects = _reject_suggestion_by_id(repository, item_id, decision)
+    elif action == "defer":
+        proposal, effects = _defer_suggestion_by_id(repository, item_id, decision)
+    else:
+        decision.payload = _contradiction_payload_for_action(proposal, action, request)
+        proposal, effects = _accept_suggestion_by_id(repository, item_id, decision)
+    return {
+        "item_type": "suggestion",
+        "suggestion": _suggestion_response(proposal, effects=effects),
+    }
 
 
 @app.get("/api/personalization", response_model=InterestProfileResponse)

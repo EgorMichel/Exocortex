@@ -251,6 +251,7 @@ class PersonalizationService:
                 FeedbackAction.CHOOSE_RIGHT,
                 FeedbackAction.RESOLVED,
                 FeedbackAction.KEEP_BOTH,
+                FeedbackAction.REJECT,
                 FeedbackAction.DEFER,
             },
             InsightType.HIDDEN_CONNECTION: {
@@ -296,6 +297,14 @@ class PersonalizationService:
         effects: list[str] = []
         nodes = [self.repository.get_node(node_id) for node_id in insight.node_ids[:2]]
         left, right = (nodes + [None, None])[:2]
+
+        if action == FeedbackAction.REJECT:
+            for node in (left, right):
+                if node:
+                    self._mark_node_resolution(node, "contradiction_rejected", note)
+                    effects.append(f"marked_node:{node.id}")
+            effects.extend(self._mark_proposal_review(insight, ReviewStatus.REJECTED))
+            return effects
 
         if action in {FeedbackAction.CHOOSE_LEFT, FeedbackAction.CHOOSE_RIGHT}:
             chosen = left if action == FeedbackAction.CHOOSE_LEFT else right

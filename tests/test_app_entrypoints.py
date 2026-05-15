@@ -1141,6 +1141,80 @@ def test_api_review_queue_combines_suggestions_insights_and_defer(monkeypatch, t
     assert statuses[insight.id] == "defer"
 
 
+def test_api_review_contradiction_resolution_for_suggestion_and_insight(monkeypatch, tmp_path):
+    _disable_llm(monkeypatch)
+    storage_path = tmp_path / "api_review_contradiction_graph"
+    monkeypatch.setenv("STORAGE_PATH", str(storage_path))
+    routes._repository = None
+    routes._llm_service = None
+    routes._agent = None
+    routes._personalization_service = None
+
+    repo = GraphRepository(storage_path=str(storage_path))
+    left = Node(content="Retrieval practice improves long-term memory.", node_type=NodeType.FACT)
+    right = Node(content="Retrieval practice does not improve long-term memory.", node_type=NodeType.FACT)
+    repo.add_node(left)
+    repo.add_node(right)
+    suggestion = AgentProposal(
+        proposal_type=ProposalType.CONTRADICTION,
+        node_ids=[left.id, right.id],
+        payload={
+            "source_id": left.id,
+            "target_id": right.id,
+            "edge_type": "contradicts",
+            "statement_a": left.content,
+            "statement_b": right.content,
+        },
+        score=0.9,
+    )
+    repo.add_proposal(suggestion)
+    repo.save()
+    insight = Insight(
+        insight_type=InsightType.CONTRADICTION,
+        title="Possible contradiction",
+        description="Two statements conflict.",
+        node_ids=[left.id, right.id],
+        score=0.8,
+        metadata={"statement_a": left.content, "statement_b": right.content},
+    )
+    InsightStore(storage_path).save_digest(Digest(insights=[insight]))
+
+    client = TestClient(routes.app)
+    review_response = client.get("/api/review")
+    assert review_response.status_code == 200
+    contradiction_items = [
+        item for item in review_response.json()["items"]
+        if item["review_kind"] == "contradiction"
+    ]
+    assert len(contradiction_items) == 2
+    assert all(item["review_data"]["statement_a"] == left.content for item in contradiction_items)
+    assert all(item["review_data"]["statement_b"] == right.content for item in contradiction_items)
+
+    suggestion_resolution = client.post(
+        f"/api/review/contradictions/{suggestion.id}/resolve",
+        json={"item_type": "suggestion", "action": "choose_left", "note": "A is better supported."},
+    )
+    insight_resolution = client.post(
+        f"/api/review/contradictions/{insight.id}/resolve",
+        json={"item_type": "insight", "action": "reject", "note": "Not actually conflicting."},
+    )
+
+    assert suggestion_resolution.status_code == 200
+    suggestion_payload = suggestion_resolution.json()["suggestion"]
+    assert suggestion_payload["review_status"] == "accepted"
+    assert suggestion_payload["payload"]["resolution"] == "choose_left"
+    assert suggestion_payload["payload"]["chosen_node_id"] == left.id
+    assert insight_resolution.status_code == 200
+    assert insight_resolution.json()["feedback"]["action"] == "reject"
+
+    reloaded = GraphRepository(storage_path=str(storage_path))
+    edges = reloaded.get_all_edges()
+    assert len(edges) == 1
+    assert edges[0].edge_type == EdgeType.CONTRADICTS
+    assert edges[0].metadata["resolution"] == "choose_left"
+    assert edges[0].metadata["chosen_node_id"] == left.id
+
+
 def test_cli_inbox_react_and_interests(monkeypatch, tmp_path, capsys):
     _disable_llm(monkeypatch)
     storage_path = tmp_path / "cli_feedback_graph"

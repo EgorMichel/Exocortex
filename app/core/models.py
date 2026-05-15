@@ -74,6 +74,7 @@ class ReviewStatus(Enum):
     ACCEPTED = "accepted"
     REJECTED = "rejected"
     EDITED = "edited"
+    DEFERRED = "deferred"
 
 
 class ProposalType(Enum):

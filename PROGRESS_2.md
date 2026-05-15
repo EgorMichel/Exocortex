@@ -4,12 +4,12 @@
 
 ## Общий статус
 
-**Текущий этап:** Этап 6 частично реализован поверх Этапа 5 + архитектурного рефакторинга из `REFACTORING_PLAN.md`.
-**Следующий рекомендуемый фокус:** полноценный review queue / Suggestions-интерфейс поверх общей очереди предложений.
+**Текущий этап:** после Этапа 6 + архитектурный рефакторинг из `REFACTORING_PLAN.md`.
+**Следующий рекомендуемый фокус:** внутренние рекомендации и мини-дайджест, связанные с review items.
 
 Новая базовая модель данных уже приведена к MVP 2-парадигме: старые типы узлов и ручных связей удалены из продуктовой модели, manual capture создает `quote` и `idea`, semantic similarity больше не подтверждается как generic-связь, а ручные узлы и связи стали основным пользовательским действием через API, `/reader` и `/graph`.
 
-Текущий автоматический тестовый набор: **110 тестов проходят**.
+Текущий автоматический тестовый набор: **111 тестов проходят**.
 
 ## Этап 1. Чистая модель данных ✅ (100%)
 
@@ -213,7 +213,7 @@
 
 - [x] Пользователь визуально понимает, где его собственная логика, а где подсказки системы.
 
-## Этап 6. Очередь предложений и новый inbox ⏳ (частично, примерно 70%)
+## Этап 6. Очередь предложений и новый inbox ✅ (100%)
 
 **Цель:** превратить текущий inbox в review queue для развития графа.
 
@@ -228,7 +228,7 @@
 - [x] Contradiction insights сохраняются как `possible_contradiction` proposal.
 - [x] `/app` переименован в продуктовой роли в `Review`.
 - [x] Добавлен единый API `/api/review`, который объединяет `Suggestion`/`AgentProposal` и agent `Insight` в общей очереди.
-- [x] Review item responses содержат `item_type`, `review_kind`, `status`, `payload`, `open_graph_url`.
+- [x] Review item responses содержат `item_type`, `review_kind`, `status`, `payload`, `review_data`, `open_graph_url`.
 - [x] Review UI показывает и suggestions, и insights в одном списке.
 - [x] Для suggestions в Review UI есть `accept`, `reject`, `defer`, `open in graph`.
 - [x] Для suggestions поддержан `edit and accept` через JSON payload editor перед accept.
@@ -241,11 +241,21 @@
   - `POST /api/review/insights/{insight_id}/defer`.
 - [x] `/graph` умеет открываться с выбранным узлом через `?node_id=...`.
 - [x] Добавлены тесты нового review queue поверх suggestions и insights.
+- [x] Contradiction flow имеет специализированный review API:
+  - `POST /api/review/contradictions/{item_id}/resolve`.
+- [x] Contradiction review поддерживает действия:
+  - `choose_left`;
+  - `choose_right`;
+  - `keep_both`;
+  - `resolved`;
+  - `reject`;
+  - `defer`.
+- [x] Review UI показывает contradiction items как явное сравнение утверждений A/B.
+- [x] Suggestions получили durable `review_status=deferred`; deferred items можно вернуть через `include_deferred=true`.
 
-Еще не сделано:
+Критерий готовности:
 
-- [ ] Contradiction flow ещё не имеет специализированного review UI с явным сравнением A/B.
-- [ ] Нет отдельного durable статуса `deferred`; сейчас defer для suggestions хранится в payload, а для insights как feedback action.
+- [x] Все агентские и LLM-предложения проходят через подтверждение пользователя в единой Review-очереди.
 
 ## Этап 7. Внутренние рекомендации и мини-дайджест ⏳ (частично, примерно 35%)
 
@@ -308,7 +318,7 @@ python -m app.cli clear
 - `venv\Scripts\python -m pytest -q`
 - `venv\Scripts\python -m compileall app`
 - `venv\Scripts\python -m mypy app`
-- Результат: `110 passed`, compileall ok, mypy без ошибок
+- Результат: `111 passed`, compileall ok, mypy без ошибок
 
 ## Последнее обновление
 
