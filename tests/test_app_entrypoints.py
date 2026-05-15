@@ -101,6 +101,8 @@ def test_web_app_is_served(monkeypatch, tmp_path):
     assert app_response.status_code == 200
     assert "Exocortex Review" in app_response.text
     assert "/api/review" in app_response.text
+    assert "/api/today" in app_response.text
+    assert "Today" in app_response.text
     assert 'id="themeToggle"' in app_response.text
     assert "exocortex-theme" in app_response.text
     assert ':root[data-theme="dark"]' in app_response.text
@@ -1107,6 +1109,7 @@ def test_api_review_queue_combines_suggestions_insights_and_defer(monkeypatch, t
         description=node.content,
         node_ids=[node.id],
         score=0.6,
+        metadata={"proposal_id": suggestion.id},
     )
     InsightStore(storage_path).save_digest(Digest(insights=[insight]))
 
@@ -1139,6 +1142,11 @@ def test_api_review_queue_combines_suggestions_insights_and_defer(monkeypatch, t
     statuses = {item["id"]: item["status"] for item in include_deferred.json()["items"]}
     assert statuses[suggestion.id] == "deferred"
     assert statuses[insight.id] == "defer"
+
+    today_response = client.get("/api/today")
+    assert today_response.status_code == 200
+    assert today_response.json()["digest"]["insights"][0]["review_item_id"] == suggestion.id
+    assert today_response.json()["review_items"][0]["id"] == suggestion.id
 
 
 def test_api_review_contradiction_resolution_for_suggestion_and_insight(monkeypatch, tmp_path):

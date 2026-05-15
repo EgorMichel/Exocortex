@@ -252,6 +252,9 @@ class InsightResponse(BaseModel):
     edge_ids: List[str]
     score: float
     metadata: Dict[str, Any]
+    review_item_id: Optional[str] = None
+    review_item_type: Optional[str] = None
+    open_review_url: Optional[str] = None
     created_at: str
 
 
@@ -366,6 +369,15 @@ class ReviewListResponse(BaseModel):
     total: int
 
 
+class TodayResponse(BaseModel):
+    """Короткий блок Today: latest digest as actionable review items."""
+    digest: Optional[DigestResponse] = None
+    review_items: List[ReviewItemResponse] = Field(default_factory=list)
+    review_total: int = 0
+    review_reacted: int = 0
+    review_pending: int = 0
+
+
 # === Lifecycle ===
 
 @asynccontextmanager
@@ -471,6 +483,7 @@ def get_personalization_service() -> PersonalizationService:
 
 
 def _insight_response(insight: Insight) -> InsightResponse:
+    review_item_id = str(insight.metadata.get("proposal_id") or insight.id)
     return InsightResponse(
         id=insight.id,
         insight_type=insight.insight_type.value,
@@ -480,6 +493,9 @@ def _insight_response(insight: Insight) -> InsightResponse:
         edge_ids=insight.edge_ids,
         score=insight.score,
         metadata=insight.metadata,
+        review_item_id=review_item_id,
+        review_item_type="suggestion" if insight.metadata.get("proposal_id") else "insight",
+        open_review_url=f"/app?review_item_id={review_item_id}",
         created_at=insight.created_at.isoformat(),
     )
 
@@ -670,6 +686,39 @@ def _review_item_from_inbox_item(item: InboxItem) -> ReviewItemResponse:
         open_graph_url=_open_graph_url(insight.node_ids),
         created_at=insight.created_at.isoformat(),
     )
+
+
+def _review_queue_items(
+    repository: GraphRepository,
+    include_reacted: bool = False,
+    include_deferred: bool = False,
+    limit: int = 100,
+) -> List[ReviewItemResponse]:
+    review_items: List[ReviewItemResponse] = []
+
+    for suggestion in repository.get_all_proposals():
+        is_deferred = _is_deferred_suggestion(suggestion)
+        is_actionable = _is_actionable_suggestion(suggestion)
+        if not include_reacted and not is_actionable:
+            continue
+        if is_deferred and not include_deferred:
+            continue
+        review_items.append(_review_item_from_suggestion(repository, suggestion))
+
+    inbox_items = get_personalization_service().list_inbox(
+        include_reacted=True,
+        limit=max(limit, 100),
+    )
+    for item in inbox_items:
+        is_deferred = item.feedback is not None and item.feedback.action.value == "defer"
+        if item.feedback and not include_reacted:
+            continue
+        if is_deferred and not include_deferred:
+            continue
+        review_items.append(_review_item_from_inbox_item(item))
+
+    review_items.sort(key=lambda item: item.created_at, reverse=True)
+    return review_items[:limit]
 
 
 def _node_label(node: Node) -> str:
@@ -1648,31 +1697,13 @@ async def get_review_queue(
 ):
     """Получить единую очередь review items из suggestions и agent insights."""
     repository = get_repository()
-    review_items: List[ReviewItemResponse] = []
-
-    for suggestion in repository.get_all_proposals():
-        is_deferred = _is_deferred_suggestion(suggestion)
-        is_actionable = _is_actionable_suggestion(suggestion)
-        if not include_reacted and not is_actionable:
-            continue
-        if is_deferred and not include_deferred:
-            continue
-        review_items.append(_review_item_from_suggestion(repository, suggestion))
-
-    inbox_items = get_personalization_service().list_inbox(
-        include_reacted=True,
-        limit=max(limit, 100),
+    review_items = _review_queue_items(
+        repository,
+        include_reacted=include_reacted,
+        include_deferred=include_deferred,
+        limit=limit,
     )
-    for item in inbox_items:
-        is_deferred = item.feedback is not None and item.feedback.action.value == "defer"
-        if item.feedback and not include_reacted:
-            continue
-        if is_deferred and not include_deferred:
-            continue
-        review_items.append(_review_item_from_inbox_item(item))
-
-    review_items.sort(key=lambda item: item.created_at, reverse=True)
-    return ReviewListResponse(items=review_items[:limit], total=min(len(review_items), limit))
+    return ReviewListResponse(items=review_items, total=len(review_items))
 
 
 @app.post("/api/suggestions/{suggestion_id}/accept", response_model=SuggestionResponse)
@@ -1952,6 +1983,43 @@ async def get_latest_digest():
     if digest is None:
         raise HTTPException(status_code=404, detail="Digest not found")
     return _digest_response(digest)
+
+
+@app.get("/api/today", response_model=TodayResponse)
+async def get_today():
+    """Получить короткий Today-блок: latest digest плюс связанные review items."""
+    repository = get_repository()
+    digest = get_agent().get_latest_digest()
+    all_items = _review_queue_items(
+        repository,
+        include_reacted=True,
+        include_deferred=True,
+        limit=200,
+    )
+    if digest is None:
+        selected_items = all_items[:3]
+        return TodayResponse(
+            digest=None,
+            review_items=selected_items,
+            review_total=len(selected_items),
+            review_reacted=sum(1 for item in selected_items if item.status not in {"pending", "deferred"}),
+            review_pending=sum(1 for item in selected_items if item.status in {"pending", "deferred"}),
+        )
+
+    digest_review_ids = {
+        str(insight.metadata.get("proposal_id") or insight.id)
+        for insight in digest.insights
+    }
+    selected_items = [item for item in all_items if item.id in digest_review_ids]
+    reacted = sum(1 for item in selected_items if item.status not in {"pending", "deferred"})
+    pending = sum(1 for item in selected_items if item.status in {"pending", "deferred"})
+    return TodayResponse(
+        digest=_digest_response(digest),
+        review_items=selected_items,
+        review_total=len(selected_items),
+        review_reacted=reacted,
+        review_pending=pending,
+    )
 
 
 @app.get("/api/insights", response_model=List[InsightResponse])

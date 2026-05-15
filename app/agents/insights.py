@@ -22,6 +22,9 @@ class InsightType(Enum):
     CONTRADICTION = "contradiction"
     HIDDEN_CONNECTION = "hidden_connection"
     REMINDER = "reminder"
+    DUPLICATE = "duplicate"
+    OPEN_QUESTION = "open_question"
+    SOURCE_REVISIT = "source_revisit"
 
 
 @dataclass

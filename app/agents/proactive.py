@@ -14,7 +14,7 @@ from typing import Any, Optional
 
 from app.agents.embeddings import LocalTextEmbeddingService, cosine_similarity
 from app.agents.insights import Digest, Insight, InsightStore, InsightType
-from app.core.models import AgentProposal, EdgeType, Node, ProposalType, ReviewStatus
+from app.core.models import AgentProposal, EdgeType, Node, NodeType, ProposalType, ReviewStatus
 from app.core.repository import GraphRepository
 
 
@@ -163,9 +163,15 @@ class ProactiveAgent:
         reminder_insights = self.find_forgotten_content()
         candidate_pairs = self._candidate_pairs(analysis_state=analysis_state)
         hidden_connection_insights = self.find_hidden_connections(candidate_pairs)
+        duplicate_insights = self.find_possible_duplicates(candidate_pairs)
+        open_question_insights = self.find_open_question_followups()
+        source_revisit_insights = self.find_source_revisits()
         contradiction_insights = await self.find_contradictions(candidate_pairs)
 
         insights.extend(contradiction_insights)
+        insights.extend(duplicate_insights)
+        insights.extend(open_question_insights)
+        insights.extend(source_revisit_insights)
         insights.extend(reminder_insights)
         insights.extend(hidden_connection_insights)
 
@@ -208,6 +214,104 @@ class ProactiveAgent:
                 )
             )
 
+        return sorted(insights, key=lambda item: item.score, reverse=True)
+
+    def find_possible_duplicates(
+        self,
+        candidate_pairs: Optional[list[NodePair]] = None,
+    ) -> list[Insight]:
+        """Find nodes that look like duplicate captures of the same idea."""
+        pairs = candidate_pairs if candidate_pairs is not None else self._candidate_pairs()
+        insights = []
+        for pair in pairs:
+            same_text = self._normalized_content(pair.left.content) == self._normalized_content(pair.right.content)
+            if not same_text and pair.score < 0.9:
+                continue
+            if self._already_has_pending_proposal(ProposalType.POSSIBLE_DUPLICATE, [pair.left.id, pair.right.id]):
+                continue
+            insights.append(
+                Insight(
+                    insight_type=InsightType.DUPLICATE,
+                    title="Возможный дубль",
+                    description=(
+                        f"{self._shorten(pair.left.content)} <-> "
+                        f"{self._shorten(pair.right.content)}"
+                    ),
+                    node_ids=[pair.left.id, pair.right.id],
+                    score=max(pair.score, 0.92 if same_text else pair.score),
+                    metadata={
+                        "duplicate_node_id": pair.right.id,
+                        "duplicate_of_node_id": pair.left.id,
+                        "shared_terms": sorted(pair.shared_terms),
+                        "same_text": same_text,
+                    },
+                )
+            )
+        return sorted(insights, key=lambda item: item.score, reverse=True)
+
+    def find_open_question_followups(self) -> list[Insight]:
+        """Surface open questions that have not yet been connected to answers."""
+        insights = []
+        for node in self.repository.get_all_nodes():
+            if node.node_type != NodeType.QUESTION:
+                continue
+            if node.review_status != ReviewStatus.ACCEPTED:
+                continue
+            related = self.repository.get_related_nodes(node.id)
+            if related:
+                continue
+            current_strength = node.calculate_current_strength()
+            insights.append(
+                Insight(
+                    insight_type=InsightType.OPEN_QUESTION,
+                    title="Вернуться к открытому вопросу",
+                    description=self._shorten(node.content),
+                    node_ids=[node.id],
+                    score=max(0.35, 1.0 - current_strength),
+                    metadata={
+                        "question": node.content,
+                        "reason": "question_without_answer_link",
+                        "current_strength": current_strength,
+                    },
+                )
+            )
+        return sorted(insights, key=lambda item: item.score, reverse=True)
+
+    def find_source_revisits(self) -> list[Insight]:
+        """Recommend revisiting source-backed nodes when their context is getting stale."""
+        insights = []
+        for node in self.repository.get_all_nodes():
+            provenance = node.provenance
+            source_id = (provenance.source_id if provenance else None) or node.metadata.get("source_id")
+            source_url = (provenance.source_url if provenance else None) or node.metadata.get("source_url")
+            source_text = node.source_text or (provenance.source_text if provenance else None)
+            if not (source_id or source_url or source_text):
+                continue
+            current_strength = node.calculate_current_strength()
+            if current_strength > 0.65 and node.node_type != NodeType.QUOTE:
+                continue
+            source_label = (
+                (provenance.document_title if provenance else None)
+                or source_url
+                or source_id
+                or "attached source"
+            )
+            insights.append(
+                Insight(
+                    insight_type=InsightType.SOURCE_REVISIT,
+                    title="Пересмотреть источник",
+                    description=f"{self._shorten(node.content)} | {self._shorten(str(source_label), 80)}",
+                    node_ids=[node.id],
+                    score=max(0.3, 0.75 - current_strength),
+                    metadata={
+                        "source_id": source_id,
+                        "source_url": source_url,
+                        "document_title": provenance.document_title if provenance else node.metadata.get("document_title"),
+                        "source_text": source_text,
+                        "current_strength": current_strength,
+                    },
+                )
+            )
         return sorted(insights, key=lambda item: item.score, reverse=True)
 
     def find_hidden_connections(
@@ -290,6 +394,9 @@ class ProactiveAgent:
         insights = self._personalize_insights(insights)
         priority = {
             InsightType.CONTRADICTION: 3,
+            InsightType.DUPLICATE: 3,
+            InsightType.OPEN_QUESTION: 2,
+            InsightType.SOURCE_REVISIT: 2,
             InsightType.REMINDER: 2,
             InsightType.HIDDEN_CONNECTION: 1,
         }
@@ -334,7 +441,11 @@ class ProactiveAgent:
             return ProposalType.PROPOSED_EDGE
         if insight.insight_type == InsightType.CONTRADICTION:
             return ProposalType.POSSIBLE_CONTRADICTION
+        if insight.insight_type == InsightType.DUPLICATE:
+            return ProposalType.POSSIBLE_DUPLICATE
         if insight.insight_type == InsightType.REMINDER:
+            return ProposalType.REMINDER
+        if insight.insight_type in {InsightType.OPEN_QUESTION, InsightType.SOURCE_REVISIT}:
             return ProposalType.REMINDER
         return None
 
@@ -448,14 +559,20 @@ class ProactiveAgent:
                 + action_counts.get("resolved", 0)
                 + action_counts.get("keep_both", 0)
             ),
+            InsightType.DUPLICATE: action_counts.get("confirm", 0),
             InsightType.HIDDEN_CONNECTION: (
                 action_counts.get("confirm", 0) + action_counts.get("refine", 0)
             ),
+            InsightType.OPEN_QUESTION: action_counts.get("useful", 0),
+            InsightType.SOURCE_REVISIT: action_counts.get("useful", 0),
             InsightType.REMINDER: action_counts.get("useful", 0),
         }
         negative_by_type = {
             InsightType.CONTRADICTION: 0,
+            InsightType.DUPLICATE: action_counts.get("reject", 0),
             InsightType.HIDDEN_CONNECTION: action_counts.get("reject", 0),
+            InsightType.OPEN_QUESTION: action_counts.get("ignore", 0),
+            InsightType.SOURCE_REVISIT: action_counts.get("ignore", 0),
             InsightType.REMINDER: action_counts.get("ignore", 0),
         }
         net = positive_by_type[insight_type] - negative_by_type[insight_type]
@@ -807,6 +924,16 @@ class ProactiveAgent:
             + self.repository.get_edges_between(right_id, left_id)
         )
         return any(edge.edge_type == edge_type for edge in edges)
+
+    def _already_has_pending_proposal(self, proposal_type: ProposalType, node_ids: list[str]) -> bool:
+        node_id_set = set(node_ids)
+        for proposal in self.repository.get_all_proposals(review_status=ReviewStatus.PENDING):
+            if proposal.proposal_type == proposal_type and set(proposal.node_ids) == node_id_set:
+                return True
+        return False
+
+    def _normalized_content(self, text: str) -> str:
+        return " ".join(re.findall(r"\w+", text.lower(), flags=re.UNICODE))
 
     def _shorten(self, text: str, limit: int = 160) -> str:
         normalized = " ".join(text.split())

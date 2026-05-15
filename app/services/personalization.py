@@ -254,10 +254,25 @@ class PersonalizationService:
                 FeedbackAction.REJECT,
                 FeedbackAction.DEFER,
             },
+            InsightType.DUPLICATE: {
+                FeedbackAction.CONFIRM,
+                FeedbackAction.REJECT,
+                FeedbackAction.DEFER,
+            },
             InsightType.HIDDEN_CONNECTION: {
                 FeedbackAction.CONFIRM,
                 FeedbackAction.REJECT,
                 FeedbackAction.REFINE,
+                FeedbackAction.DEFER,
+            },
+            InsightType.OPEN_QUESTION: {
+                FeedbackAction.USEFUL,
+                FeedbackAction.IGNORE,
+                FeedbackAction.DEFER,
+            },
+            InsightType.SOURCE_REVISIT: {
+                FeedbackAction.USEFUL,
+                FeedbackAction.IGNORE,
                 FeedbackAction.DEFER,
             },
             InsightType.REMINDER: {
@@ -284,8 +299,12 @@ class PersonalizationService:
             return [f"insight_deferred:{insight.id}"]
         if insight.insight_type == InsightType.CONTRADICTION:
             return self._apply_contradiction_feedback(insight, action, note)
+        if insight.insight_type == InsightType.DUPLICATE:
+            return self._apply_duplicate_feedback(insight, action, note)
         if insight.insight_type == InsightType.HIDDEN_CONNECTION:
             return self._apply_connection_feedback(insight, action, note, edge_type=edge_type)
+        if insight.insight_type in {InsightType.OPEN_QUESTION, InsightType.SOURCE_REVISIT}:
+            return self._apply_review_prompt_feedback(insight, action, note)
         return self._apply_reminder_feedback(insight, action, note)
 
     def _apply_contradiction_feedback(
@@ -336,6 +355,52 @@ class PersonalizationService:
             )
             effects.append(f"contradiction_edge:{edge.id}")
             effects.extend(self._mark_proposal_review(insight, ReviewStatus.ACCEPTED))
+        return effects
+
+    def _apply_duplicate_feedback(
+        self,
+        insight: Insight,
+        action: FeedbackAction,
+        note: Optional[str],
+    ) -> list[str]:
+        effects: list[str] = []
+        nodes = [self.repository.get_node(node_id) for node_id in insight.node_ids[:2]]
+        for node in nodes:
+            if not node:
+                continue
+            if action == FeedbackAction.CONFIRM:
+                self._mark_node_interaction(node, "duplicate_confirmed", note)
+                effects.append(f"updated_node:{node.id}")
+            elif action == FeedbackAction.REJECT:
+                self._mark_node_resolution(node, "duplicate_rejected", note)
+                effects.append(f"marked_node:{node.id}")
+        if action == FeedbackAction.CONFIRM:
+            effects.extend(self._mark_proposal_review(insight, ReviewStatus.ACCEPTED))
+        elif action == FeedbackAction.REJECT:
+            effects.extend(self._mark_proposal_review(insight, ReviewStatus.REJECTED))
+        return effects
+
+    def _apply_review_prompt_feedback(
+        self,
+        insight: Insight,
+        action: FeedbackAction,
+        note: Optional[str],
+    ) -> list[str]:
+        effects = []
+        for node_id in insight.node_ids:
+            node = self.repository.get_node(node_id)
+            if not node:
+                continue
+            if action == FeedbackAction.USEFUL:
+                self._mark_node_interaction(node, f"{insight.insight_type.value}_useful", note)
+                effects.append(f"updated_node:{node.id}")
+            else:
+                self._mark_node_resolution(node, f"{insight.insight_type.value}_ignored", note)
+                effects.append(f"marked_node:{node.id}")
+        if action == FeedbackAction.USEFUL:
+            effects.extend(self._mark_proposal_review(insight, ReviewStatus.ACCEPTED))
+        elif action == FeedbackAction.IGNORE:
+            effects.extend(self._mark_proposal_review(insight, ReviewStatus.REJECTED))
         return effects
 
     def _apply_connection_feedback(

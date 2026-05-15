@@ -3,7 +3,7 @@ from datetime import timedelta
 
 from app.agents.insights import Digest, Insight, InsightStore, InsightType
 from app.agents.proactive import AgentSettings, ProactiveAgent
-from app.core.models import Edge, EdgeType, Node, NodeType, utc_now
+from app.core.models import Edge, EdgeType, Node, NodeType, SourceProvenance, utc_now
 from app.core.repository import GraphRepository
 from app.services.personalization import (
     FeedbackAction,
@@ -421,6 +421,48 @@ def test_digest_prioritizes_contradictions_before_other_insights(tmp_path):
         InsightType.CONTRADICTION,
         InsightType.REMINDER,
     ]
+
+
+def test_stage7_agent_generates_duplicates_questions_and_source_revisits(tmp_path):
+    repo = GraphRepository(storage_path=str(tmp_path / "graph"))
+    first = Node(content="Spaced repetition improves durable recall.", node_type=NodeType.IDEA)
+    duplicate = Node(content="Spaced repetition improves durable recall.", node_type=NodeType.IDEA)
+    question = Node(content="How should review queues prioritize open questions?", node_type=NodeType.QUESTION)
+    quote = Node(
+        content="A source-backed quote about spaced repetition.",
+        node_type=NodeType.QUOTE,
+        source_text="Original paragraph about spaced repetition.",
+        provenance=SourceProvenance(
+            source_id="source-1",
+            source_url="local:paper.md",
+            document_title="Paper",
+            source_text="Original paragraph about spaced repetition.",
+        ),
+    )
+    quote.last_interacted = utc_now() - timedelta(days=14)
+    for node in (first, duplicate, question, quote):
+        repo.add_node(node)
+
+    agent = ProactiveAgent(
+        repo,
+        settings=AgentSettings(similarity_threshold=0.1, digest_limit=5),
+    )
+
+    duplicates = agent.find_possible_duplicates()
+    questions = agent.find_open_question_followups()
+    revisits = agent.find_source_revisits()
+    digest = asyncio.run(agent.analyze(save=True))
+
+    assert duplicates and duplicates[0].insight_type == InsightType.DUPLICATE
+    assert set(duplicates[0].node_ids) == {first.id, duplicate.id}
+    assert questions and questions[0].insight_type == InsightType.OPEN_QUESTION
+    assert questions[0].node_ids == [question.id]
+    assert revisits and revisits[0].insight_type == InsightType.SOURCE_REVISIT
+    assert revisits[0].metadata["source_id"] == "source-1"
+    assert all("proposal_id" in insight.metadata for insight in digest.insights)
+    proposal_types = {proposal.proposal_type.value for proposal in repo.get_all_proposals()}
+    assert "possible_duplicate" in proposal_types
+    assert "reminder" in proposal_types
 
 
 def test_digest_uses_interest_profile_for_same_priority_insights(tmp_path):

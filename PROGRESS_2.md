@@ -4,12 +4,12 @@
 
 ## Общий статус
 
-**Текущий этап:** после Этапа 6 + архитектурный рефакторинг из `REFACTORING_PLAN.md`.
-**Следующий рекомендуемый фокус:** внутренние рекомендации и мини-дайджест, связанные с review items.
+**Текущий этап:** после Этапа 7 + архитектурный рефакторинг из `REFACTORING_PLAN.md`.
+**Следующий рекомендуемый фокус:** метрики MVP и event log.
 
 Новая базовая модель данных уже приведена к MVP 2-парадигме: старые типы узлов и ручных связей удалены из продуктовой модели, manual capture создает `quote` и `idea`, semantic similarity больше не подтверждается как generic-связь, а ручные узлы и связи стали основным пользовательским действием через API, `/reader` и `/graph`.
 
-Текущий автоматический тестовый набор: **111 тестов проходят**.
+Текущий автоматический тестовый набор: **112 тестов проходят**.
 
 ## Этап 1. Чистая модель данных ✅ (100%)
 
@@ -49,7 +49,7 @@
 - [x] Добавлены допустимые значения:
   - `trust_status`: `confirmed`, `suggested`, `auto_inferred`, `conflict`, `needs_clarification`;
   - `origin`: `user`, `llm`, `agent`, `system`;
-  - `review_status`: `pending`, `accepted`, `rejected`, `edited`.
+  - `review_status`: `pending`, `accepted`, `rejected`, `edited`, `deferred`.
 - [x] Обновлены LLM extraction schema/prompt под новые типы.
 - [x] LLM-created nodes/edges помечаются как `suggested`, `origin=llm`, `review_status=pending`.
 - [x] Обновлены manual capture и reader defaults:
@@ -257,7 +257,7 @@
 
 - [x] Все агентские и LLM-предложения проходят через подтверждение пользователя в единой Review-очереди.
 
-## Этап 7. Внутренние рекомендации и мини-дайджест ⏳ (частично, примерно 35%)
+## Этап 7. Внутренние рекомендации и мини-дайджест ✅ (100%)
 
 **Цель:** сделать агент полезным без внешних рекомендаций.
 
@@ -267,19 +267,24 @@
   - hidden connection;
   - contradiction;
   - reminder.
+- [x] Proactive agent генерирует `possible duplicate`.
+- [x] Proactive agent генерирует `open question follow-up`.
+- [x] Proactive agent генерирует `source revisit`.
 - [x] Дайджест ограничивается 1-3 инсайтами.
 - [x] Дайджест сохраняется и доступен через API/CLI.
-- [x] Есть web inbox для просмотра последних инсайтов.
+- [x] Есть Review UI для просмотра последних инсайтов и review items.
 - [x] Есть базовая personalization-логика на основе feedback.
+- [x] Дайджест ссылается на конкретные review items через `review_item_id`, `review_item_type`, `open_review_url`.
+- [x] Добавлен API `GET /api/today` для мини-дайджеста как actionable review items.
+- [x] В Review UI добавлен блок `Today`.
+- [x] `GET /api/today` возвращает легкие метрики реакции на дайджест:
+  - `review_total`;
+  - `review_reacted`;
+  - `review_pending`.
 
-Еще не сделано:
+Критерий готовности:
 
-- [ ] Нет `possible duplicate`.
-- [ ] Нет `open question follow-up`.
-- [ ] Нет `source revisit`.
-- [ ] Дайджест пока не ссылается на конкретные review items.
-- [ ] Нет отдельного экрана "Сегодня".
-- [ ] Нет метрик реакции на дайджест.
+- [x] При входе пользователь видит короткий список полезных действий, которые развивают его граф.
 
 ## Этап 8. Метрики MVP ⏳ (не начат, 0%)
 
@@ -318,7 +323,7 @@ python -m app.cli clear
 - `venv\Scripts\python -m pytest -q`
 - `venv\Scripts\python -m compileall app`
 - `venv\Scripts\python -m mypy app`
-- Результат: `111 passed`, compileall ok, mypy без ошибок
+- Результат: `112 passed`, compileall ok, mypy без ошибок
 
 ## Последнее обновление
 

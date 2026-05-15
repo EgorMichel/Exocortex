@@ -436,6 +436,32 @@
       color: var(--description);
     }
 
+    .today-list {
+      display: grid;
+      gap: 8px;
+    }
+
+    .today-item {
+      display: grid;
+      gap: 4px;
+      width: 100%;
+      min-height: auto;
+      text-align: left;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: var(--metric-bg);
+      padding: 10px;
+    }
+
+    .today-item strong {
+      font-size: 13px;
+    }
+
+    .today-item span {
+      color: var(--muted);
+      font-size: 12px;
+    }
+
     .empty,
     .error {
       border: 1px dashed var(--line);
@@ -526,6 +552,24 @@
     <aside>
       <section class="panel" aria-live="polite">
         <div class="row">
+          <h2>Today</h2>
+          <span id="todayCount" class="badge">0</span>
+        </div>
+        <div class="profile-grid">
+          <div class="metric">
+            <span>Pending</span>
+            <strong id="todayPending">0</strong>
+          </div>
+          <div class="metric">
+            <span>Reacted</span>
+            <strong id="todayReacted">0</strong>
+          </div>
+        </div>
+        <div id="todayItems" class="today-list"></div>
+      </section>
+
+      <section class="panel" aria-live="polite">
+        <div class="row">
           <h2>Personalization</h2>
           <span id="style" class="badge">balanced</span>
         </div>
@@ -571,6 +615,18 @@
         ["confirm", "Confirm"],
         ["reject", "Reject"],
         ["refine", "Refine"],
+      ],
+      duplicate: [
+        ["confirm", "Confirm"],
+        ["reject", "Reject"],
+      ],
+      open_question: [
+        ["useful", "Useful"],
+        ["ignore", "Ignore"],
+      ],
+      source_revisit: [
+        ["useful", "Useful"],
+        ["ignore", "Ignore"],
       ],
       reminder: [
         ["useful", "Useful"],
@@ -768,6 +824,22 @@
         : '<li><span>No topics</span><strong>0</strong></li>';
     }
 
+    function renderToday(today) {
+      document.querySelector("#todayCount").textContent = today.review_total ?? 0;
+      document.querySelector("#todayPending").textContent = today.review_pending ?? 0;
+      document.querySelector("#todayReacted").textContent = today.review_reacted ?? 0;
+      const list = document.querySelector("#todayItems");
+      const items = today.review_items || [];
+      list.innerHTML = items.length
+        ? items.slice(0, 3).map((item) => (
+          `<button class="today-item" type="button" data-open-review="${escapeHtml(item.id)}">
+            <strong>${escapeHtml(item.title)}</strong>
+            <span>${escapeHtml(item.review_kind)} · ${escapeHtml(item.status)}</span>
+          </button>`
+        )).join("")
+        : '<div class="empty">No digest review items.</div>';
+    }
+
     async function load() {
       if (state.loading) {
         return;
@@ -775,12 +847,14 @@
       state.loading = true;
       setMessage("");
       try {
-        const [items, profile] = await Promise.all([
+        const [items, profile, today] = await Promise.all([
           requestJson(`/api/review?include_reacted=${state.includeReacted ? "true" : "false"}&include_deferred=${state.includeReacted ? "true" : "false"}`),
           requestJson("/api/personalization"),
+          requestJson("/api/today"),
         ]);
         renderReviewItems(items.items || []);
         renderProfile(profile);
+        renderToday(today);
       } catch (error) {
         setMessage(error.message, "error");
       } finally {
@@ -877,6 +951,17 @@
         return;
       }
       react(button.dataset.insight, button.dataset.action);
+    });
+
+    document.querySelector("#todayItems").addEventListener("click", (event) => {
+      const button = event.target.closest("button[data-open-review]");
+      if (!button) {
+        return;
+      }
+      const card = document.querySelector(`[data-suggestion="${CSS.escape(button.dataset.openReview)}"], [data-insight="${CSS.escape(button.dataset.openReview)}"], [data-contradiction="${CSS.escape(button.dataset.openReview)}"]`)?.closest(".card");
+      if (card) {
+        card.scrollIntoView({ behavior: "smooth", block: "center" });
+      }
     });
 
     pendingFilter.addEventListener("click", () => {

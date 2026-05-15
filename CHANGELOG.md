@@ -48,6 +48,13 @@
   - Review UI показывает contradiction items как A/B-сравнение утверждений
   - Для suggestions добавлен durable `review_status=deferred`; deferred items можно вернуть через `include_deferred=true`
   - `/graph` умеет открываться с выбранным узлом через `?node_id=...`
+- **MVP 2 Этап 7: внутренние рекомендации и мини-дайджест**:
+  - Proactive agent теперь генерирует `duplicate`, `open_question` и `source_revisit` insights
+  - `duplicate` сохраняется как `possible_duplicate` proposal; `open_question` и `source_revisit` попадают в review flow как reminder-style proposals
+  - Digest insights возвращают явные ссылки на review items: `review_item_id`, `review_item_type`, `open_review_url`
+  - Добавлен endpoint `GET /api/today`, который возвращает latest digest как actionable review items
+  - `/app` получил блок `Today` с 1-3 актуальными review actions
+  - `GET /api/today` возвращает легкие счетчики реакции на дайджест: `review_total`, `review_reacted`, `review_pending`
 - **Запуск приложения**:
   - Точка входа `python -m app.main` для FastAPI-сервера
   - CLI `python -m app.cli` с командами `add`, `stats`, `list`, `search`, `forgotten`, `clear`
@@ -63,7 +70,7 @@
   - `Edge`: Ручная логическая связь между узлами с полями id, тип, слой, источник, цель, вес, метаданные, `trust_status`, `origin`, `review_status`, `user_comment`
   - `NodeType`: MVP 2-типы узлов (IDEA, FACT, QUOTE, QUESTION, CONCLUSION, SOURCE)
   - `EdgeType`: MVP-типы ручных связей (`USED_IN`, `DERIVED_FROM`, `CONTRADICTS`)
-  - `TrustStatus`, `Origin`, `ReviewStatus`: стандартизированные статусы доверия, происхождения и проверки
+  - `TrustStatus`, `Origin`, `ReviewStatus`: стандартизированные статусы доверия, происхождения и проверки; `ReviewStatus` поддерживает `deferred`
   - `KnowledgeFragment`: Исходный фрагмент знания с метаданными и `llm_status`/`warnings`/`errors`
   - `AgentProposal`: Reviewable предложения агента (`proposed_edge`, `proposed_tag`, `possible_duplicate`, `possible_contradiction`, `reminder`)
 - **Графовый репозиторий** (`app/core/repository.py`):
@@ -136,7 +143,7 @@
   - Тесты оптимизированного анализа: переиспользование candidate pairs, ранний skip без LLM-клиента, батчинг противоречий и пропуск неизменившихся пар
   - Тесты ручных мыслей с `source_text`, reader UI и повторного анализа при изменении источника
   - Тесты ручного создания/редактирования узлов и связей, reader tags/defaults и отказа от legacy-типов
-  - Текущий набор: 111 автоматических тестов
+  - Текущий набор: 112 автоматических тестов
 
 ### Изменено
 - **Breaking change / MVP data model**: Ручные связи приведены к MVP-набору `used_in`, `derived_from`, `contradicts`; legacy-типы вроде `related_to`, `supports`, `example_of`, `part_of` и `similar_to` больше не являются валидными.
