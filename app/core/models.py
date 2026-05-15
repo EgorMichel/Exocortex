@@ -61,6 +61,145 @@ class ReviewStatus(Enum):
     EDITED = "edited"
 
 
+PROVENANCE_FIELDS = (
+    "source_id",
+    "source_url",
+    "document_title",
+    "author",
+    "published_at",
+    "added_at",
+    "source_type",
+    "position",
+    "offset_start",
+    "offset_end",
+    "source_text",
+    "user_comment",
+)
+
+
+@dataclass
+class SourceProvenance:
+    """Structured provenance attachment for a knowledge node."""
+    source_id: Optional[str] = None
+    source_url: Optional[str] = None
+    document_title: Optional[str] = None
+    author: Optional[str] = None
+    published_at: Optional[str] = None
+    added_at: Optional[str] = None
+    source_type: Optional[str] = None
+    position: Optional[str] = None
+    offset_start: Optional[int] = None
+    offset_end: Optional[int] = None
+    source_text: Optional[str] = None
+    user_comment: Optional[str] = None
+
+    def __post_init__(self):
+        self.source_id = self._clean_text(self.source_id)
+        self.source_url = self._clean_text(self.source_url)
+        self.document_title = self._clean_text(self.document_title)
+        self.author = self._clean_text(self.author)
+        self.published_at = self._clean_text(self.published_at)
+        self.added_at = self._clean_text(self.added_at)
+        self.source_type = self._clean_text(self.source_type)
+        self.position = self._clean_text(self.position)
+        self.source_text = self._clean_text(self.source_text)
+        self.user_comment = self._clean_text(self.user_comment)
+        self.offset_start = self._clean_int(self.offset_start)
+        self.offset_end = self._clean_int(self.offset_end)
+        if self.has_data() and not self.added_at:
+            self.added_at = utc_now().isoformat()
+        if self.has_data() and not self.source_id:
+            self.source_id = self.build_source_id(
+                source_url=self.source_url,
+                document_title=self.document_title,
+                source_type=self.source_type,
+                source_text=self.source_text,
+            )
+
+    @staticmethod
+    def _clean_text(value: Any) -> Optional[str]:
+        if value is None:
+            return None
+        text = str(value).strip()
+        return text or None
+
+    @staticmethod
+    def _clean_int(value: Any) -> Optional[int]:
+        if value is None or value == "":
+            return None
+        try:
+            return int(value)
+        except (TypeError, ValueError):
+            return None
+
+    @staticmethod
+    def build_source_id(
+        source_url: Optional[str] = None,
+        document_title: Optional[str] = None,
+        source_type: Optional[str] = None,
+        source_text: Optional[str] = None,
+    ) -> str:
+        """Build a stable non-graph source id for repeated captures."""
+        parts = [
+            SourceProvenance._clean_text(source_url),
+            SourceProvenance._clean_text(document_title),
+            SourceProvenance._clean_text(source_type),
+        ]
+        if not any(parts):
+            parts.append(SourceProvenance._clean_text(source_text))
+        key = "|".join(part or "" for part in parts) or "manual"
+        return f"src_{uuid.uuid5(uuid.NAMESPACE_URL, key).hex}"
+
+    @classmethod
+    def from_metadata(
+        cls,
+        metadata: Optional[Dict[str, Any]] = None,
+        source_text: Optional[str] = None,
+    ) -> Optional["SourceProvenance"]:
+        metadata = metadata or {}
+        nested = metadata.get("provenance")
+        if isinstance(nested, str):
+            try:
+                nested = json.loads(nested)
+            except json.JSONDecodeError:
+                nested = {}
+        if not isinstance(nested, dict):
+            nested = {}
+
+        values: Dict[str, Any] = {}
+        for field_name in PROVENANCE_FIELDS:
+            if field_name in nested:
+                values[field_name] = nested[field_name]
+            elif field_name in metadata:
+                values[field_name] = metadata[field_name]
+
+        if values.get("offset_start") is None and metadata.get("source_offset_start") is not None:
+            values["offset_start"] = metadata.get("source_offset_start")
+        if values.get("offset_end") is None and metadata.get("source_offset_end") is not None:
+            values["offset_end"] = metadata.get("source_offset_end")
+        if values.get("user_comment") is None and metadata.get("source_user_comment") is not None:
+            values["user_comment"] = metadata.get("source_user_comment")
+        if values.get("source_text") is None and source_text:
+            values["source_text"] = source_text
+
+        provenance = cls(**values)
+        return provenance if provenance.has_data() else None
+
+    def has_data(self) -> bool:
+        return any(
+            getattr(self, field_name) is not None
+            for field_name in PROVENANCE_FIELDS
+            if field_name != "added_at"
+        )
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            field_name: getattr(self, field_name)
+            for field_name in PROVENANCE_FIELDS
+            if getattr(self, field_name) is not None
+        }
+
+
 @dataclass
 class Node:
     """
@@ -83,6 +222,7 @@ class Node:
     id: str = field(default_factory=lambda: str(uuid.uuid4()))
     source_text: Optional[str] = None
     metadata: Dict[str, Any] = field(default_factory=dict)
+    provenance: Optional[SourceProvenance] = None
     trust_status: TrustStatus = TrustStatus.CONFIRMED
     origin: Origin = Origin.USER
     review_status: ReviewStatus = ReviewStatus.ACCEPTED
@@ -96,6 +236,17 @@ class Node:
     embeddings: Optional[list[float]] = None
     
     def __post_init__(self):
+        if isinstance(self.provenance, dict):
+            self.provenance = SourceProvenance(**self.provenance)
+        if self.provenance is None:
+            self.provenance = SourceProvenance.from_metadata(
+                self.metadata,
+                source_text=self.source_text,
+            )
+        elif self.source_text and not self.provenance.source_text:
+            self.provenance.source_text = self.source_text
+        if self.provenance and not self.source_text and self.provenance.source_text:
+            self.source_text = self.provenance.source_text
         if self.trust_status == TrustStatus.CONFIRMED and self.metadata.get('trust_status'):
             self.trust_status = self.metadata['trust_status']
         if self.origin == Origin.USER and self.metadata.get('origin'):
@@ -124,6 +275,16 @@ class Node:
     def _sync_standard_metadata(self) -> None:
         """Keep standard MVP 2 metadata keys available for older callers."""
         self.metadata.setdefault('source', 'manual')
+        if self.provenance:
+            if self.source_text:
+                self.provenance.source_text = self.source_text
+            elif self.provenance.source_text:
+                self.source_text = self.provenance.source_text
+            provenance_data = self.provenance.to_dict()
+            if provenance_data:
+                self.metadata['provenance'] = provenance_data
+                for key, value in provenance_data.items():
+                    self.metadata[key] = value
         self.metadata['trust_status'] = self.trust_status.value
         self.metadata['origin'] = self.origin.value
         self.metadata['review_status'] = self.review_status.value
@@ -163,6 +324,14 @@ class Node:
         data['source_text'] = data.get('source_text') or None
         data['node_type'] = NodeType(data['node_type'])
         data['metadata'] = json.loads(data['metadata']) if isinstance(data.get('metadata'), str) else data.get('metadata', {})
+        provenance_data = data.get('provenance')
+        if isinstance(provenance_data, str):
+            provenance_data = json.loads(provenance_data) if provenance_data else None
+        data['provenance'] = (
+            SourceProvenance(**provenance_data)
+            if isinstance(provenance_data, dict)
+            else SourceProvenance.from_metadata(data['metadata'], source_text=data.get('source_text'))
+        )
         data['trust_status'] = TrustStatus(data.get('trust_status') or data['metadata'].get('trust_status') or TrustStatus.CONFIRMED.value)
         data['origin'] = Origin(data.get('origin') or data['metadata'].get('origin') or Origin.USER.value)
         data['review_status'] = ReviewStatus(data.get('review_status') or data['metadata'].get('review_status') or ReviewStatus.ACCEPTED.value)

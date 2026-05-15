@@ -18,7 +18,7 @@ from app.agents.insights import Digest, Insight
 from app.agents.proactive import AgentSettings, ProactiveAgent
 from app.agents.scheduler import build_agent_scheduler
 from app.config import load_settings
-from app.core.models import Edge, EdgeType, Node, NodeType, Origin, ReviewStatus, TrustStatus
+from app.core.models import Edge, EdgeType, Node, NodeType, Origin, ReviewStatus, SourceProvenance, TrustStatus
 from app.core.repository import GraphRepository
 from app.llm.extraction import extract_and_store, LLMService
 from app.services.external_sources import ExternalSourceIngestor
@@ -57,8 +57,16 @@ class ManualFragmentRequest(BaseModel):
     node_type: Optional[str] = Field(default=None, description="Тип создаваемого узла")
     tags: List[str] = Field(default_factory=list, description="Пользовательские теги")
     source_type: str = Field(default="manual_selection", description="Тип источника")
+    source_id: Optional[str] = Field(default=None, description="Стабильный ID provenance-источника")
     source_url: Optional[str] = Field(default=None, description="URL или путь источника")
     document_title: Optional[str] = Field(default=None, description="Название документа")
+    author: Optional[str] = Field(default=None, description="Автор источника")
+    published_at: Optional[str] = Field(default=None, description="Дата публикации источника")
+    added_at: Optional[str] = Field(default=None, description="Дата добавления источника")
+    position: Optional[str] = Field(default=None, description="Позиция в источнике")
+    offset_start: Optional[int] = Field(default=None, description="Начальное смещение в источнике")
+    offset_end: Optional[int] = Field(default=None, description="Конечное смещение в источнике")
+    source_user_comment: Optional[str] = Field(default=None, description="Комментарий к provenance-источнику")
     metadata: Dict[str, Any] = Field(default_factory=dict, description="Метаданные выделения")
 
 
@@ -80,6 +88,7 @@ class NodeCreateRequest(BaseModel):
     title: Optional[str] = None
     tags: List[str] = Field(default_factory=list)
     user_comment: Optional[str] = None
+    provenance: Optional["SourceProvenanceRequest"] = None
     trust_status: Optional[str] = None
     origin: Optional[str] = None
     review_status: Optional[str] = None
@@ -94,6 +103,7 @@ class NodePatchRequest(BaseModel):
     title: Optional[str] = None
     tags: Optional[List[str]] = None
     user_comment: Optional[str] = None
+    provenance: Optional["SourceProvenanceRequest"] = None
     trust_status: Optional[str] = None
     origin: Optional[str] = None
     review_status: Optional[str] = None
@@ -126,6 +136,30 @@ class EdgePatchRequest(BaseModel):
     metadata: Optional[Dict[str, Any]] = None
 
 
+class SourceProvenanceRequest(BaseModel):
+    """Структурированная provenance-привязка knowledge-узла."""
+    source_id: Optional[str] = None
+    source_url: Optional[str] = None
+    document_title: Optional[str] = None
+    author: Optional[str] = None
+    published_at: Optional[str] = None
+    added_at: Optional[str] = None
+    source_type: Optional[str] = None
+    position: Optional[str] = None
+    offset_start: Optional[int] = None
+    offset_end: Optional[int] = None
+    source_text: Optional[str] = None
+    user_comment: Optional[str] = None
+
+
+try:
+    NodeCreateRequest.model_rebuild()
+    NodePatchRequest.model_rebuild()
+except AttributeError:
+    NodeCreateRequest.update_forward_refs(SourceProvenanceRequest=SourceProvenanceRequest)
+    NodePatchRequest.update_forward_refs(SourceProvenanceRequest=SourceProvenanceRequest)
+
+
 class NodeResponse(BaseModel):
     """Представление узла в API."""
     id: str
@@ -141,6 +175,10 @@ class NodeResponse(BaseModel):
     user_comment: Optional[str] = None
     title: Optional[str] = None
     tags: List[str]
+    provenance: Optional[Dict[str, Any]] = None
+    source_id: Optional[str] = None
+    source_url: Optional[str] = None
+    document_title: Optional[str] = None
 
 
 class EdgeResponse(BaseModel):
@@ -399,7 +437,33 @@ def _request_fields_set(request: BaseModel) -> set[str]:
     return set(getattr(request, "model_fields_set", None) or getattr(request, "__fields_set__", set()))
 
 
+def _model_to_dict(model: BaseModel, exclude_unset: bool = False) -> Dict[str, Any]:
+    if hasattr(model, "model_dump"):
+        return model.model_dump(exclude_unset=exclude_unset)
+    return model.dict(exclude_unset=exclude_unset)
+
+
+def _provenance_from_request(request: Optional[SourceProvenanceRequest]) -> Optional[SourceProvenance]:
+    if request is None:
+        return None
+    return SourceProvenance(**_model_to_dict(request))
+
+
+def _apply_provenance_patch(node: Node, request: SourceProvenanceRequest) -> None:
+    current = node.provenance or SourceProvenance.from_metadata(
+        node.metadata,
+        source_text=node.source_text,
+    ) or SourceProvenance()
+    for key, value in _model_to_dict(request, exclude_unset=True).items():
+        setattr(current, key, value)
+    node.provenance = SourceProvenance(**current.to_dict())
+    node.source_text = node.provenance.source_text
+    node._sync_standard_metadata()
+
+
 def _node_response(node: Node) -> NodeResponse:
+    node._sync_standard_metadata()
+    provenance_data = node.provenance.to_dict() if node.provenance else None
     return NodeResponse(
         id=node.id,
         node_type=node.node_type.value,
@@ -414,6 +478,10 @@ def _node_response(node: Node) -> NodeResponse:
         user_comment=node.user_comment,
         title=node.title,
         tags=node.tags,
+        provenance=provenance_data,
+        source_id=provenance_data.get("source_id") if provenance_data else None,
+        source_url=provenance_data.get("source_url") if provenance_data else None,
+        document_title=provenance_data.get("document_title") if provenance_data else None,
     )
 
 
@@ -541,6 +609,20 @@ async def add_manual_fragment(request: ManualFragmentRequest):
         node_type = NodeType(request.node_type) if request.node_type else (
             NodeType.IDEA if has_source_text else NodeType.QUOTE
         )
+        if node_type == NodeType.SOURCE:
+            raise ValueError("reader/capture cannot create source nodes")
+        provenance_metadata = {
+            "source_id": request.source_id,
+            "author": request.author,
+            "published_at": request.published_at,
+            "added_at": request.added_at,
+            "position": request.position,
+            "offset_start": request.offset_start,
+            "offset_end": request.offset_end,
+            "source_user_comment": request.source_user_comment,
+        }
+        metadata = dict(request.metadata)
+        metadata.update({key: value for key, value in provenance_metadata.items() if value is not None})
         fragment, node = store_manual_fragment(
             repository=get_repository(),
             text=request.text,
@@ -550,7 +632,7 @@ async def add_manual_fragment(request: ManualFragmentRequest):
             source_text=request.source_text,
             node_type=node_type,
             tags=_clean_tags(request.tags),
-            metadata=request.metadata,
+            metadata=metadata,
         )
     except ValueError as exc:
         message = str(exc)
@@ -585,6 +667,7 @@ async def create_node(request: NodeCreateRequest):
         node_type=node_type,
         source_text=request.source_text.strip() if request.source_text else None,
         metadata=dict(request.metadata),
+        provenance=_provenance_from_request(request.provenance),
         trust_status=TrustStatus.CONFIRMED,
         origin=Origin.USER,
         review_status=ReviewStatus.ACCEPTED,
@@ -622,6 +705,8 @@ async def update_node(node_id: str, request: NodePatchRequest):
             raise HTTPException(status_code=400, detail=f"Invalid node_type: {request.node_type}")
     if "source_text" in fields_set:
         node.source_text = request.source_text.strip() if request.source_text else None
+        if node.provenance:
+            node.provenance.source_text = node.source_text
     if "title" in fields_set:
         node.title = request.title.strip() if request.title else None
     if "tags" in fields_set:
@@ -645,7 +730,45 @@ async def update_node(node_id: str, request: NodePatchRequest):
             raise HTTPException(status_code=400, detail=f"Invalid review_status: {request.review_status}")
     if request.metadata is not None:
         node.metadata = dict(request.metadata)
+    if "provenance" in fields_set:
+        if request.provenance is None:
+            node.provenance = None
+            node.source_text = None
+            node.metadata.pop("provenance", None)
+            for key in (
+                "source_id",
+                "source_url",
+                "document_title",
+                "author",
+                "published_at",
+                "added_at",
+                "source_type",
+                "position",
+                "offset_start",
+                "offset_end",
+                "source_text",
+                "source_user_comment",
+            ):
+                node.metadata.pop(key, None)
+        else:
+            _apply_provenance_patch(node, request.provenance)
 
+    if not repository.update_node(node):
+        raise HTTPException(status_code=404, detail="Node not found")
+    if repository.storage_path:
+        repository.save()
+    return _node_response(node)
+
+
+@app.patch("/api/nodes/{node_id}/provenance", response_model=NodeResponse)
+async def update_node_provenance(node_id: str, request: SourceProvenanceRequest):
+    """Создать или обновить provenance-привязку существующего узла."""
+    repository = get_repository()
+    node = repository.get_node(node_id)
+    if not node:
+        raise HTTPException(status_code=404, detail="Node not found")
+
+    _apply_provenance_patch(node, request)
     if not repository.update_node(node):
         raise HTTPException(status_code=404, detail="Node not found")
     if repository.storage_path:
@@ -762,24 +885,7 @@ async def get_nodes(
         nodes = repository.get_all_nodes()[:limit]
     
     return NodeListResponse(
-        nodes=[
-            NodeResponse(
-                id=n.id,
-                node_type=n.node_type.value,
-                content=n.content,
-                source_text=n.source_text,
-                strength=n.strength,
-                created_at=n.created_at.isoformat(),
-                metadata=n.metadata,
-                trust_status=n.trust_status.value,
-                origin=n.origin.value,
-                review_status=n.review_status.value,
-                user_comment=n.user_comment,
-                title=n.title,
-                tags=n.tags,
-            )
-            for n in nodes
-        ],
+        nodes=[_node_response(n) for n in nodes],
         total=len(nodes)
     )
 
@@ -793,21 +899,7 @@ async def get_node(node_id: str):
     if not node:
         raise HTTPException(status_code=404, detail="Node not found")
     
-    return NodeResponse(
-        id=node.id,
-        node_type=node.node_type.value,
-        content=node.content,
-        source_text=node.source_text,
-        strength=node.strength,
-        created_at=node.created_at.isoformat(),
-        metadata=node.metadata,
-        trust_status=node.trust_status.value,
-        origin=node.origin.value,
-        review_status=node.review_status.value,
-        user_comment=node.user_comment,
-        title=node.title,
-        tags=node.tags,
-    )
+    return _node_response(node)
 
 
 @app.get("/api/edges", response_model=EdgeListResponse)
@@ -865,24 +957,7 @@ async def get_node_neighbors(node_id: str, radius: int = 1):
     neighbors = repository.get_neighbors(node_id, radius=radius)
     
     return NodeListResponse(
-        nodes=[
-            NodeResponse(
-                id=n.id,
-                node_type=n.node_type.value,
-                content=n.content,
-                source_text=n.source_text,
-                strength=n.strength,
-                created_at=n.created_at.isoformat(),
-                metadata=n.metadata,
-                trust_status=n.trust_status.value,
-                origin=n.origin.value,
-                review_status=n.review_status.value,
-                user_comment=n.user_comment,
-                title=n.title,
-                tags=n.tags,
-            )
-            for n in neighbors
-        ],
+        nodes=[_node_response(n) for n in neighbors],
         total=len(neighbors)
     )
 

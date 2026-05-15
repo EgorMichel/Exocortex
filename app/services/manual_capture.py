@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any, Optional
 
-from app.core.models import KnowledgeFragment, Node, NodeType, Origin, ReviewStatus, TrustStatus
+from app.core.models import KnowledgeFragment, Node, NodeType, Origin, ReviewStatus, SourceProvenance, TrustStatus
 from app.core.repository import GraphRepository
 
 
@@ -23,6 +23,8 @@ def store_manual_fragment(
     content = text.strip()
     if not content:
         raise ValueError("No text provided.")
+    if node_type == NodeType.SOURCE:
+        raise ValueError("reader/capture cannot create source nodes")
 
     source_content = source_text.strip() if source_text else None
     fragment = KnowledgeFragment(
@@ -41,6 +43,16 @@ def store_manual_fragment(
         node_metadata["document_title"] = document_title
     if metadata:
         node_metadata.update(metadata)
+    provenance = SourceProvenance.from_metadata(
+        {
+            **node_metadata,
+            "source_type": source_type,
+            "source_url": source_url,
+            "document_title": document_title,
+            "source_text": source_content or content,
+        },
+        source_text=source_content or content,
+    )
     cleaned_tags = []
     seen_tags = set()
     for tag in tags or node_metadata.get("tags", []):
@@ -55,6 +67,7 @@ def store_manual_fragment(
         node_type=node_type,
         source_text=source_content,
         metadata=node_metadata,
+        provenance=provenance,
         trust_status=TrustStatus.CONFIRMED,
         origin=Origin.USER,
         review_status=ReviewStatus.ACCEPTED,

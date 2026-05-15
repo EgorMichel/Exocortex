@@ -5,6 +5,14 @@
 ## [Unreleased]
 
 ### Добавлено
+- **MVP 2 Этап 2: источники как provenance-привязки**:
+  - Структурированная provenance-привязка у узла: `source_id`, `source_url`, `document_title`, `author`, `published_at`, `added_at`, `source_type`, `position`, `offset_start`, `offset_end`, `source_text`, `user_comment`
+  - API `PATCH /api/nodes/{node_id}/provenance` для создания и обновления provenance без создания source-узла
+  - Ответы узлов возвращают `provenance` и стабильные поля `source_id`, `source_url`, `document_title`
+  - `/reader` и manual capture переиспользуют общий `source_id` для одного URL/локального файла
+  - `/reader` и manual capture не создают `source`-узлы и не создают `derived_from`-связь к источнику
+  - `/graph` показывает source title/URL, `source_text`, offsets и metadata источника в боковой панели
+  - `/graph` получил ссылку открытия `source_url` и подсветку узлов с тем же `source_id`
 - **MVP 2 Этап 3: ручное создание узлов и связей**:
   - Пользовательские endpoints `POST /api/nodes`, `PATCH /api/nodes/{node_id}`, `POST /api/edges`, `PATCH /api/edges/{edge_id}`
   - Создание ручных узлов и связей в `/graph`
@@ -97,7 +105,7 @@
   - Тесты оптимизированного анализа: переиспользование candidate pairs, ранний skip без LLM-клиента, батчинг противоречий и пропуск неизменившихся пар
   - Тесты ручных мыслей с `source_text`, reader UI и повторного анализа при изменении источника
   - Тесты ручного создания/редактирования узлов и связей, reader tags/defaults и отказа от legacy-типов
-  - Текущий набор: 94 автоматических теста
+  - Текущий набор: 97 автоматических тестов
 
 ### Изменено
 - **Breaking change / MVP 2 data model**: Продуктовая модель переведена на чистый набор типов узлов `idea`, `fact`, `quote`, `question`, `conclusion`, `source` и ручных связей `used_in`, `derived_from`, `contradicts`; legacy-типы и alias не поддерживаются.
@@ -106,6 +114,7 @@
 - **Graph UI**: Списки фильтров и визуальные классы обновлены под MVP 2-типы узлов и связей; интерфейс позволяет создавать узлы, редактировать выбранный узел и создавать ручную связь между двумя выбранными узлами.
 - **LLM extraction**: Prompt/schema запрещают `related_to`, `supports`, `example_of`, `part_of`, `similar_to` и не превращают семантическую похожесть в ручную связь.
 - **API responses**: Узлы и связи возвращают стандартизированные поля `trust_status`, `origin`, `review_status`, `user_comment`; узлы также возвращают `title` и `tags`.
+- **API responses**: Узлы также возвращают структурированную provenance-привязку; `source_text` сохранён для совместимости.
 - **Proactive analysis**: Поиск похожих пар, embeddings, fingerprints и LLM-проверка противоречий учитывают `source_text` вместе с `content`
 - **LLM extraction**: Удалён алгоритмический fallback; без LLM-клиента или при ошибке ответа извлечение возвращает пустой результат
 - **Proactive digest**: Для противоречий в CLI-дайджесте выводятся оба исходных утверждения, которые сравнивал агент

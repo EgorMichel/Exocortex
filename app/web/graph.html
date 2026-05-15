@@ -455,6 +455,11 @@
       stroke-width: 3;
     }
 
+    .node.source-match .ring {
+      stroke: var(--accent-strong);
+      stroke-width: 4;
+    }
+
     .node {
       cursor: pointer;
     }
@@ -493,6 +498,38 @@
       border-radius: 8px;
       background: var(--surface);
       padding: 10px;
+    }
+
+    .source-actions {
+      display: flex;
+      gap: 8px;
+      flex-wrap: wrap;
+    }
+
+    .source-actions a {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      min-height: 32px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      color: var(--text);
+      text-decoration: none;
+      padding: 0 10px;
+    }
+
+    .source-actions a:hover {
+      border-color: var(--button-hover-border);
+      background: var(--button-hover-bg);
+    }
+
+    .source-meta {
+      display: grid;
+      gap: 4px;
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 1.4;
+      overflow-wrap: anywhere;
     }
 
     .form-grid {
@@ -896,7 +933,9 @@
         <span class="label">Source</span>
         <div class="source-box">
           <h3 id="sourceTitle">No source</h3>
+          <div id="sourceMeta" class="source-meta"></div>
           <p id="sourceText" class="muted">Source text will appear here when the selected node has provenance attached.</p>
+          <div id="sourceActions" class="source-actions"></div>
         </div>
       </section>
 
@@ -931,6 +970,7 @@
       activeTypes: new Set(NODE_TYPES),
       activeEdges: new Set(Object.keys(EDGE_LABELS)),
       selectedId: null,
+      highlightedSourceId: null,
       edgeDraft: {
         sourceId: null,
         targetId: null,
@@ -982,6 +1022,28 @@
 
     function tagsFor(node) {
       return Array.isArray(node?.tags) ? node.tags : [];
+    }
+
+    function provenanceFor(node) {
+      const provenance = node?.provenance || node?.metadata?.provenance || {};
+      return {
+        source_id: provenance.source_id || node?.source_id || node?.metadata?.source_id || null,
+        source_url: provenance.source_url || node?.source_url || node?.metadata?.source_url || null,
+        document_title: provenance.document_title || node?.document_title || node?.metadata?.document_title || null,
+        author: provenance.author || node?.metadata?.author || null,
+        published_at: provenance.published_at || node?.metadata?.published_at || null,
+        added_at: provenance.added_at || node?.metadata?.added_at || null,
+        source_type: provenance.source_type || node?.metadata?.source_type || null,
+        position: provenance.position || node?.metadata?.position || null,
+        offset_start: provenance.offset_start ?? node?.metadata?.offset_start ?? null,
+        offset_end: provenance.offset_end ?? node?.metadata?.offset_end ?? null,
+        source_text: provenance.source_text || node?.source_text || node?.metadata?.source_text || null,
+        user_comment: provenance.user_comment || node?.metadata?.source_user_comment || null,
+      };
+    }
+
+    function sourceLabel(provenance) {
+      return provenance.document_title || provenance.source_url || provenance.source_type || "Attached source";
     }
 
     function parseTags(value) {
@@ -1113,13 +1175,14 @@
     function visibleGraph() {
       const query = state.search.trim().toLowerCase();
       const visibleNodes = state.nodes.filter((node) => {
+        const provenance = provenanceFor(node);
         if (!state.activeTypes.has(node.node_type)) {
           return false;
         }
         if (!query) {
           return true;
         }
-        return `${node.content} ${node.source_text || ""} ${node.metadata?.document_title || ""} ${tagsFor(node).join(" ")}`
+        return `${node.content} ${provenance.source_text || ""} ${provenance.document_title || ""} ${provenance.source_url || ""} ${tagsFor(node).join(" ")}`
           .toLowerCase()
           .includes(query);
       });
@@ -1239,9 +1302,13 @@
       nodeLayer.innerHTML = visibleNodes.map((node) => {
         const isSelected = node.id === state.selectedId;
         const isNeighbor = selectedNeighbors.has(node.id);
-        const shouldDim = state.selectedId && !isSelected && !isNeighbor;
+        const provenance = provenanceFor(node);
+        const isSourceMatch = state.highlightedSourceId && provenance.source_id === state.highlightedSourceId;
+        const shouldDim = state.highlightedSourceId
+          ? !isSourceMatch
+          : state.selectedId && !isSelected && !isNeighbor;
         return `
-          <g class="node ${escapeHtml(node.node_type)} ${isSelected ? "selected" : ""} ${isNeighbor ? "neighbor" : ""} ${shouldDim ? "dim" : ""}"
+          <g class="node ${escapeHtml(node.node_type)} ${isSelected ? "selected" : ""} ${isNeighbor ? "neighbor" : ""} ${isSourceMatch ? "source-match" : ""} ${shouldDim ? "dim" : ""}"
              data-node-id="${escapeHtml(node.id)}"
              transform="translate(${node.x.toFixed(1)} ${node.y.toFixed(1)})">
             <circle class="ring" r="${node.radius.toFixed(1)}"></circle>
@@ -1287,7 +1354,9 @@
       const strengthBar = document.querySelector("#strengthBar");
       const strengthText = document.querySelector("#strengthText");
       const sourceTitle = document.querySelector("#sourceTitle");
+      const sourceMeta = document.querySelector("#sourceMeta");
       const sourceText = document.querySelector("#sourceText");
+      const sourceActions = document.querySelector("#sourceActions");
       const edgeList = document.querySelector("#edgeList");
       const editTitle = document.querySelector("#editNodeTitle");
       const editType = document.querySelector("#editNodeType");
@@ -1306,7 +1375,9 @@
         strengthBar.style.width = "0%";
         strengthText.textContent = "No node selected.";
         sourceTitle.textContent = "No source";
+        sourceMeta.textContent = "";
         sourceText.textContent = "Source text will appear here when the selected node has provenance attached.";
+        sourceActions.innerHTML = "";
         edgeList.innerHTML = '<p class="muted">No node selected.</p>';
         editTitle.value = "";
         editType.value = "idea";
@@ -1331,8 +1402,32 @@
       const strength = Number(node.strength || 0);
       strengthBar.style.width = `${Math.round(Math.max(0, Math.min(1, strength)) * 100)}%`;
       strengthText.textContent = `stored strength ${strength.toFixed(2)} · created ${new Date(node.created_at).toLocaleString()}`;
-      sourceTitle.textContent = node.metadata?.document_title || node.metadata?.source_url || node.metadata?.source_type || "Attached source";
-      sourceText.textContent = node.source_text || "This node has no source_text. It may still have provenance in metadata.";
+      const provenance = provenanceFor(node);
+      const sourceMetaLines = [
+        provenance.source_id ? `source_id: ${provenance.source_id}` : null,
+        provenance.source_url ? `url/path: ${provenance.source_url}` : null,
+        provenance.author ? `author: ${provenance.author}` : null,
+        provenance.published_at ? `published: ${provenance.published_at}` : null,
+        provenance.added_at ? `added: ${new Date(provenance.added_at).toLocaleString()}` : null,
+        provenance.source_type ? `type: ${provenance.source_type}` : null,
+        provenance.position ? `position: ${provenance.position}` : null,
+        provenance.offset_start !== null || provenance.offset_end !== null
+          ? `offsets: ${provenance.offset_start ?? "?"}-${provenance.offset_end ?? "?"}`
+          : null,
+        provenance.user_comment ? `comment: ${provenance.user_comment}` : null,
+      ].filter(Boolean);
+      sourceTitle.textContent = sourceMetaLines.length || provenance.source_text
+        ? sourceLabel(provenance)
+        : "No source";
+      sourceMeta.innerHTML = sourceMetaLines.map((line) => `<span>${escapeHtml(line)}</span>`).join("");
+      sourceText.textContent = provenance.source_text || "This node has no source_text. It may still have provenance in metadata.";
+      const openLink = provenance.source_url
+        ? `<a href="${escapeHtml(provenance.source_url)}" target="_blank" rel="noreferrer">Open Source</a>`
+        : "";
+      const highlightButton = provenance.source_id
+        ? `<button id="highlightSourceButton" type="button">${state.highlightedSourceId === provenance.source_id ? "Clear Highlight" : "Highlight Same"}</button>`
+        : "";
+      sourceActions.innerHTML = `${openLink}${highlightButton}`;
       editTitle.value = node.title || "";
       editType.value = node.node_type;
       editContent.value = node.content || "";
@@ -1689,6 +1784,17 @@
         if (related) {
           selectNode(related.dataset.relatedId, true);
         }
+      });
+
+      document.querySelector("#sourceActions").addEventListener("click", (event) => {
+        const button = event.target.closest("#highlightSourceButton");
+        if (!button) {
+          return;
+        }
+        const node = state.nodes.find((item) => item.id === state.selectedId);
+        const sourceId = provenanceFor(node).source_id;
+        state.highlightedSourceId = state.highlightedSourceId === sourceId ? null : sourceId;
+        renderGraph();
       });
 
       document.querySelector("#zoomIn").addEventListener("click", () => {

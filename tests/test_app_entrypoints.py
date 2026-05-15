@@ -263,7 +263,143 @@ def test_api_add_manual_fragment_without_llm(monkeypatch, tmp_path):
     assert node.review_status.value == "accepted"
     assert node.metadata["entry_mode"] == "manual_selection"
     assert node.metadata["document_title"] == "notes.md"
+    assert node.provenance is not None
+    assert node.provenance.source_url == "local:notes.md"
+    assert node.provenance.document_title == "notes.md"
+    assert node.provenance.offset_start == 10
+    assert node.provenance.offset_end == 58
+    assert node.provenance.source_text == "A manually selected excerpt should be stored verbatim."
     assert repo.get_all_fragments()[0].extracted_nodes == [node.id]
+
+
+def test_api_create_and_update_node_provenance(monkeypatch, tmp_path):
+    _disable_llm(monkeypatch)
+    storage_path = tmp_path / "api_provenance_graph"
+    monkeypatch.setenv("STORAGE_PATH", str(storage_path))
+    _reset_route_state()
+
+    client = TestClient(routes.app)
+    create_response = client.post(
+        "/api/nodes",
+        json={
+            "content": "A claim grounded in a source.",
+            "node_type": "fact",
+            "provenance": {
+                "source_url": "https://example.test/article",
+                "document_title": "Example Article",
+                "author": "Ada",
+                "published_at": "2026-05-01",
+                "source_type": "url",
+                "position": "section 2",
+                "offset_start": 15,
+                "offset_end": 42,
+                "source_text": "The exact quoted source text.",
+                "user_comment": "Useful context.",
+            },
+        },
+    )
+
+    assert create_response.status_code == 200
+    created = create_response.json()
+    assert created["source_id"].startswith("src_")
+    assert created["source_url"] == "https://example.test/article"
+    assert created["document_title"] == "Example Article"
+    assert created["source_text"] == "The exact quoted source text."
+    assert created["provenance"]["offset_start"] == 15
+
+    patch_response = client.patch(
+        f"/api/nodes/{created['id']}/provenance",
+        json={
+            "document_title": "Updated Article",
+            "position": "section 3",
+            "offset_start": 50,
+            "offset_end": 90,
+            "source_text": "Updated quoted text.",
+        },
+    )
+
+    assert patch_response.status_code == 200
+    updated = patch_response.json()
+    assert updated["document_title"] == "Updated Article"
+    assert updated["source_url"] == "https://example.test/article"
+    assert updated["source_text"] == "Updated quoted text."
+    assert updated["provenance"]["position"] == "section 3"
+    assert updated["provenance"]["offset_end"] == 90
+
+    repo = GraphRepository(storage_path=str(storage_path))
+    node = repo.get_node(created["id"])
+    assert node is not None
+    assert node.provenance is not None
+    assert node.provenance.document_title == "Updated Article"
+    assert node.metadata["provenance"]["source_text"] == "Updated quoted text."
+
+
+def test_reader_provenance_reuses_source_id_and_creates_no_source_nodes_or_edges(monkeypatch, tmp_path):
+    _disable_llm(monkeypatch)
+    storage_path = tmp_path / "api_reader_provenance_graph"
+    monkeypatch.setenv("STORAGE_PATH", str(storage_path))
+    _reset_route_state()
+
+    client = TestClient(routes.app)
+    first_response = client.post(
+        "/api/manual-fragments",
+        json={
+            "text": "First selected passage.",
+            "source_type": "reader",
+            "source_url": "local:shared.md",
+            "document_title": "shared.md",
+            "metadata": {"offset_start": 4, "offset_end": 27},
+        },
+    )
+    second_response = client.post(
+        "/api/manual-fragments",
+        json={
+            "text": "Second selected passage.",
+            "source_type": "reader",
+            "source_url": "local:shared.md",
+            "document_title": "shared.md",
+            "metadata": {"offset_start": 40, "offset_end": 63},
+        },
+    )
+
+    assert first_response.status_code == 200
+    assert second_response.status_code == 200
+    repo = GraphRepository(storage_path=str(storage_path))
+    first = repo.get_node(first_response.json()["node_id"])
+    second = repo.get_node(second_response.json()["node_id"])
+    assert first is not None
+    assert second is not None
+    assert first.provenance is not None
+    assert second.provenance is not None
+    assert first.provenance.source_id == second.provenance.source_id
+    assert first.provenance.source_url == "local:shared.md"
+    assert first.provenance.document_title == "shared.md"
+    assert first.provenance.offset_start == 4
+    assert first.provenance.offset_end == 27
+    assert first.provenance.source_text == "First selected passage."
+    assert repo.get_nodes_by_type(NodeType.SOURCE) == []
+    assert repo.get_all_edges() == []
+
+
+def test_reader_capture_rejects_source_node_type(monkeypatch, tmp_path):
+    _disable_llm(monkeypatch)
+    storage_path = tmp_path / "api_reader_no_source_node_graph"
+    monkeypatch.setenv("STORAGE_PATH", str(storage_path))
+    _reset_route_state()
+
+    client = TestClient(routes.app)
+    response = client.post(
+        "/api/manual-fragments",
+        json={
+            "text": "Reader should not create source nodes.",
+            "node_type": "source",
+            "source_type": "reader",
+        },
+    )
+
+    assert response.status_code == 400
+    repo = GraphRepository(storage_path=str(storage_path))
+    assert repo.get_all_nodes() == []
 
 
 def test_api_add_manual_thought_with_source_text(monkeypatch, tmp_path):
