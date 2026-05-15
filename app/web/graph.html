@@ -287,6 +287,18 @@
       color: var(--accent-strong);
     }
 
+    .tag-list {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+    }
+
+    .tag-list.empty {
+      color: var(--muted);
+      font-size: 13px;
+      line-height: 1.45;
+    }
+
     .chip.fact { color: var(--blue); }
     .chip.idea { color: var(--violet); }
     .chip.quote { color: var(--amber); }
@@ -843,6 +855,7 @@
           <span id="selectedType" class="badge">none</span>
           <span id="selectedId" class="muted"></span>
         </div>
+        <div id="selectedTags" class="tag-list empty">No tags</div>
         <p id="selectedContent" class="muted">Click any node to inspect its content, source and relations.</p>
       </section>
 
@@ -965,6 +978,10 @@
     function shorten(value, limit = 44) {
       const text = String(value || "").replace(/\s+/g, " ").trim();
       return text.length <= limit ? text : `${text.slice(0, limit - 3)}...`;
+    }
+
+    function tagsFor(node) {
+      return Array.isArray(node?.tags) ? node.tags : [];
     }
 
     function parseTags(value) {
@@ -1102,7 +1119,7 @@
         if (!query) {
           return true;
         }
-        return `${node.content} ${node.source_text || ""} ${node.metadata?.document_title || ""}`
+        return `${node.content} ${node.source_text || ""} ${node.metadata?.document_title || ""} ${tagsFor(node).join(" ")}`
           .toLowerCase()
           .includes(query);
       });
@@ -1242,12 +1259,16 @@
     function renderResults(nodes) {
       const results = nodes.slice(0, 18);
       resultList.innerHTML = results.length
-        ? results.map((node) => `
-          <button class="result ${node.id === state.selectedId ? "active" : ""}" type="button" data-result-id="${escapeHtml(node.id)}">
-            <h3>${escapeHtml(shorten(node.content, 58))}</h3>
-            <p class="muted">${escapeHtml(TYPE_LABELS[node.node_type] || node.node_type)} · ${escapeHtml(compactId(node.id))}</p>
-          </button>
-        `).join("")
+        ? results.map((node) => {
+          const tags = tagsFor(node);
+          const tagText = tags.length ? ` · #${tags.map((tag) => escapeHtml(tag)).join(" #")}` : "";
+          return `
+            <button class="result ${node.id === state.selectedId ? "active" : ""}" type="button" data-result-id="${escapeHtml(node.id)}">
+              <h3>${escapeHtml(shorten(node.title || node.content, 58))}</h3>
+              <p class="muted">${escapeHtml(TYPE_LABELS[node.node_type] || node.node_type)} · ${escapeHtml(compactId(node.id))}${tagText}</p>
+            </button>
+          `;
+        }).join("")
         : '<p class="muted">No visible nodes match the current filters.</p>';
     }
 
@@ -1261,6 +1282,7 @@
       const title = document.querySelector("#selectedTitle");
       const type = document.querySelector("#selectedType");
       const id = document.querySelector("#selectedId");
+      const selectedTags = document.querySelector("#selectedTags");
       const content = document.querySelector("#selectedContent");
       const strengthBar = document.querySelector("#strengthBar");
       const strengthText = document.querySelector("#strengthText");
@@ -1278,6 +1300,8 @@
         title.textContent = "Select a node";
         type.textContent = "none";
         id.textContent = "";
+        selectedTags.textContent = "No tags";
+        selectedTags.classList.add("empty");
         content.textContent = "Click any node to inspect its content, source and relations.";
         strengthBar.style.width = "0%";
         strengthText.textContent = "No node selected.";
@@ -1298,6 +1322,11 @@
       title.textContent = shorten(node.content, 82);
       type.textContent = node.node_type;
       id.textContent = compactId(node.id);
+      const tags = tagsFor(node);
+      selectedTags.classList.toggle("empty", tags.length === 0);
+      selectedTags.innerHTML = tags.length
+        ? tags.map((tag) => `<span class="badge">#${escapeHtml(tag)}</span>`).join("")
+        : "No tags";
       content.textContent = node.content || "";
       const strength = Number(node.strength || 0);
       strengthBar.style.width = `${Math.round(Math.max(0, Math.min(1, strength)) * 100)}%`;

@@ -159,6 +159,7 @@ def test_graph_app_is_served(monkeypatch, tmp_path):
     assert 'id="createNodeButton"' in graph_response.text
     assert 'id="saveNodeButton"' in graph_response.text
     assert 'id="createEdgeButton"' in graph_response.text
+    assert 'id="selectedTags"' in graph_response.text
 
 
 def test_api_add_knowledge_uses_configured_storage(monkeypatch, tmp_path):
