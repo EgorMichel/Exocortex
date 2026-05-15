@@ -15,10 +15,11 @@ from app.llm.extraction import (
     ExtractedEntity,
     ExtractedRelation,
     ExtractionResult,
+    SuggestionResult,
     extract_and_store
 )
 from app.core.repository import GraphRepository
-from app.core.models import KnowledgeFragment, NodeType, EdgeType
+from app.core.models import KnowledgeFragment, Node, NodeType, EdgeType
 
 
 def _disable_llm_env(monkeypatch):
@@ -114,6 +115,57 @@ class TestLLMExtraction:
         assert "valid JSON only" in system_message
         assert "must be in Russian" in system_message
         assert "source text language" in system_message
+
+    def test_suggestion_prompt_requires_reviewable_items_not_graph_writes(self):
+        service = LLMService(api_key=None)
+        node = Node(content="Python automation scripts improve repeatable workflows.", node_type=NodeType.IDEA)
+
+        node_prompt = service._get_node_suggestion_prompt(node)
+        text_prompt = service._get_text_suggestion_prompt("Python helps automate work.")
+
+        assert "must not create graph nodes or edges directly" in node_prompt
+        assert "node_title|node_type|tag|similar_node|manual_edge|duplicate|contradiction" in node_prompt
+        assert "Do not create nodes or edges directly" in text_prompt
+        assert '"type": "node_type"' in text_prompt
+
+    def test_suggest_for_node_system_message_uses_review_prompt(self):
+        class FakeCompletions:
+            def __init__(self):
+                self.last_messages = None
+
+            async def create(self, **kwargs):
+                self.last_messages = kwargs["messages"]
+
+                class Message:
+                    content = '{"suggestions": [{"type": "tag", "node_ids": [], "payload": {"tag": "python"}, "score": 0.7}], "summary": "Готово."}'
+
+                class Choice:
+                    message = Message()
+
+                class Response:
+                    choices = [Choice()]
+
+                return Response()
+
+        class FakeChat:
+            def __init__(self):
+                self.completions = FakeCompletions()
+
+        class FakeClient:
+            def __init__(self):
+                self.chat = FakeChat()
+
+        service = LLMService(api_key=None)
+        service.client = FakeClient()
+        node = Node(content="Python automation scripts improve repeatable workflows.", node_type=NodeType.IDEA)
+
+        result = asyncio.run(service.suggest_for_node(node))
+
+        system_message = service.client.chat.completions.last_messages[0]["content"]
+        assert isinstance(result, SuggestionResult)
+        assert result.suggestions[0].type == "tag"
+        assert "Never create graph objects directly" in system_message
+        assert "valid JSON only" in system_message
     
     def test_extraction_result_to_graph_elements(self):
         """Тест конвертации результата извлечения в элементы графа."""

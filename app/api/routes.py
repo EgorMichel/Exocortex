@@ -23,6 +23,7 @@ from app.core.models import (
     Edge,
     EdgeLayer,
     EdgeType,
+    KnowledgeFragment,
     Node,
     NodeType,
     Origin,
@@ -32,7 +33,7 @@ from app.core.models import (
     TrustStatus,
 )
 from app.core.repository import GraphRepository
-from app.llm.extraction import extract_and_store, LLMService
+from app.llm.extraction import LLMService, SuggestionResult
 from app.services.external_sources import ExternalSourceIngestor
 from app.services.manual_capture import store_manual_fragment
 from app.services.personalization import InboxItem, InsightFeedback, PersonalizationService
@@ -53,6 +54,7 @@ class AddKnowledgeResponse(BaseModel):
     nodes_created: int
     edges_created: int
     summary: str
+    suggestions_created: int = 0
     llm_status: str = "skipped"
     warnings: List[str] = Field(default_factory=list)
     errors: List[str] = Field(default_factory=list)
@@ -574,11 +576,42 @@ def _existing_suggestion_keys(repository: GraphRepository) -> set[tuple[Any, ...
     }
 
 
+def _is_rejected_by_feedback(node: Node, suggestion_type: ProposalType, payload: Dict[str, Any]) -> bool:
+    """Use stored rejection feedback as a light personalization signal."""
+    feedback_items = node.metadata.get("suggestion_feedback")
+    if not isinstance(feedback_items, list):
+        return False
+
+    tag = str(payload.get("tag") or "").strip().lower()
+    edge_type = str(payload.get("edge_type") or "").strip().lower()
+    target_id = str(payload.get("target_id") or payload.get("similar_node_id") or "").strip()
+    for item in feedback_items:
+        if not isinstance(item, dict) or item.get("action") != "reject":
+            continue
+        if item.get("suggestion_type") != suggestion_type.value:
+            continue
+        raw_payload = item.get("payload")
+        rejected_payload: Dict[str, Any] = raw_payload if isinstance(raw_payload, dict) else {}
+        if tag and str(rejected_payload.get("tag") or "").strip().lower() == tag:
+            return True
+        if edge_type and str(rejected_payload.get("edge_type") or "").strip().lower() == edge_type:
+            return True
+        if target_id and target_id in {
+            str(rejected_payload.get("target_id") or ""),
+            str(rejected_payload.get("similar_node_id") or ""),
+            str(rejected_payload.get("duplicate_node_id") or ""),
+        }:
+            return True
+    return False
+
+
 def _build_node_suggestions(repository: GraphRepository, node: Node) -> list[AgentProposal]:
     existing_keys = _existing_suggestion_keys(repository)
     suggestions: list[AgentProposal] = []
 
     def add(proposal_type: ProposalType, node_ids: List[str], payload: Dict[str, Any], score: float) -> None:
+        if _is_rejected_by_feedback(node, proposal_type, payload):
+            return
         key = _proposal_key(proposal_type, node_ids, payload)
         if key in existing_keys:
             return
@@ -660,6 +693,149 @@ def _build_node_suggestions(repository: GraphRepository, node: Node) -> list[Age
     return suggestions
 
 
+def _related_nodes_for_suggestions(repository: GraphRepository, node: Node, limit: int = 8) -> list[Node]:
+    candidates = [item for item in repository.get_all_nodes() if item.id != node.id]
+    candidates.sort(key=lambda item: _term_overlap(node, item), reverse=True)
+    return candidates[:limit]
+
+
+def _suggestions_from_llm_result(
+    repository: GraphRepository,
+    anchor_node: Optional[Node],
+    result: SuggestionResult,
+    existing_keys: Optional[set[tuple[Any, ...]]] = None,
+) -> list[AgentProposal]:
+    """Normalize LLM suggestion JSON into persisted AgentProposal objects."""
+    existing_keys = existing_keys or _existing_suggestion_keys(repository)
+    suggestions: list[AgentProposal] = []
+
+    for item in result.suggestions:
+        try:
+            proposal_type = ProposalType(item.type)
+        except ValueError:
+            continue
+
+        payload = dict(item.payload)
+        node_ids = [str(node_id) for node_id in item.node_ids if repository.get_node(str(node_id))]
+        if anchor_node and proposal_type in {ProposalType.NODE_TITLE, ProposalType.NODE_TYPE, ProposalType.TAG}:
+            node_ids = [anchor_node.id]
+        elif anchor_node and proposal_type in {
+            ProposalType.SIMILAR_NODE,
+            ProposalType.MANUAL_EDGE,
+            ProposalType.DUPLICATE,
+            ProposalType.CONTRADICTION,
+        }:
+            source_id = str(payload.get("source_id") or anchor_node.id)
+            target_id = str(
+                payload.get("target_id")
+                or payload.get("similar_node_id")
+                or payload.get("duplicate_node_id")
+                or (node_ids[0] if node_ids else "")
+            )
+            if not repository.get_node(source_id) or not repository.get_node(target_id):
+                continue
+            if source_id == target_id:
+                continue
+            node_ids = [source_id, target_id]
+            payload.setdefault("source_id", source_id)
+            payload.setdefault("target_id", target_id)
+            if proposal_type == ProposalType.SIMILAR_NODE:
+                payload.setdefault("similar_node_id", target_id)
+            if proposal_type == ProposalType.DUPLICATE:
+                payload.setdefault("duplicate_node_id", target_id)
+            if proposal_type == ProposalType.CONTRADICTION:
+                payload["edge_type"] = EdgeType.CONTRADICTS.value
+            if proposal_type in {ProposalType.MANUAL_EDGE, ProposalType.CONTRADICTION}:
+                try:
+                    payload["edge_type"] = EdgeType(str(payload.get("edge_type") or EdgeType.USED_IN.value)).value
+                except ValueError:
+                    continue
+                payload.setdefault("suggested_by", "llm")
+
+        if anchor_node and _is_rejected_by_feedback(anchor_node, proposal_type, payload):
+            continue
+        key = _proposal_key(proposal_type, node_ids, payload)
+        if key in existing_keys:
+            continue
+        suggestions.append(AgentProposal(
+            proposal_type=proposal_type,
+            node_ids=node_ids,
+            payload=payload,
+            score=max(0.0, min(1.0, item.score)),
+            origin=Origin.LLM,
+            review_status=ReviewStatus.PENDING,
+        ))
+        existing_keys.add(key)
+
+    return suggestions
+
+
+async def _build_node_suggestions_with_llm(repository: GraphRepository, node: Node) -> list[AgentProposal]:
+    related_nodes = _related_nodes_for_suggestions(repository, node)
+    llm_result = await get_llm_service().suggest_for_node(node, related_nodes=related_nodes)
+    existing_keys = _existing_suggestion_keys(repository)
+    suggestions = _suggestions_from_llm_result(repository, node, llm_result, existing_keys=existing_keys)
+    existing_keys.update(_proposal_key(item.proposal_type, item.node_ids, item.payload) for item in suggestions)
+    heuristic_suggestions = _build_node_suggestions(repository, node)
+    for suggestion in heuristic_suggestions:
+        key = _proposal_key(suggestion.proposal_type, suggestion.node_ids, suggestion.payload)
+        if key not in existing_keys:
+            suggestions.append(suggestion)
+            existing_keys.add(key)
+    return suggestions
+
+
+async def _build_knowledge_suggestions(
+    repository: GraphRepository,
+    fragment: KnowledgeFragment,
+    llm_service: LLMService,
+) -> list[AgentProposal]:
+    """Create reviewable suggestions from raw /api/knowledge text without graph writes."""
+    llm_result = await llm_service.suggest_for_text(
+        fragment.content,
+        source_type=fragment.source_type,
+        source_url=fragment.source_url,
+    )
+    suggestions: list[AgentProposal] = []
+    existing_keys = _existing_suggestion_keys(repository)
+    for item in llm_result.suggestions:
+        if item.type != ProposalType.NODE_TYPE.value:
+            continue
+        payload = dict(item.payload)
+        content = str(payload.get("content") or "").strip()
+        if not content:
+            continue
+        try:
+            node_type = NodeType(str(payload.get("node_type") or NodeType.FACT.value))
+        except ValueError:
+            continue
+        tags = payload.get("tags")
+        payload.update({
+            "content": content,
+            "node_type": node_type.value,
+            "title": str(payload.get("title") or _short_title(content)).strip(),
+            "tags": _clean_tags(tags if isinstance(tags, list) else []),
+            "source_text": str(payload.get("source_text") or fragment.content).strip(),
+            "source_type": fragment.source_type,
+            "source_url": fragment.source_url,
+            "source_fragment": fragment.id,
+            "suggested_by": "llm",
+        })
+        key = _proposal_key(ProposalType.NODE_TYPE, [], payload)
+        if key in existing_keys:
+            continue
+        suggestions.append(AgentProposal(
+            proposal_type=ProposalType.NODE_TYPE,
+            node_ids=[],
+            payload=payload,
+            score=max(0.0, min(1.0, item.score)),
+            origin=Origin.LLM,
+            review_status=ReviewStatus.PENDING,
+        ))
+        existing_keys.add(key)
+    return suggestions
+
+
 def _accept_suggestion(repository: GraphRepository, proposal: AgentProposal, edited_payload: Dict[str, Any]) -> list[str]:
     payload = dict(proposal.payload)
     payload.update({key: value for key, value in edited_payload.items() if value is not None})
@@ -681,13 +857,43 @@ def _accept_suggestion(repository: GraphRepository, proposal: AgentProposal, edi
 
     elif suggestion_type == ProposalType.NODE_TYPE.value:
         node = repository.get_node(proposal.node_ids[0]) if proposal.node_ids else None
-        if not node:
-            raise ValueError("Suggestion node not found")
         node_type = NodeType(str(payload.get("node_type")))
-        node.node_type = node_type
-        node.review_status = ReviewStatus.EDITED if edited_payload else ReviewStatus.ACCEPTED
-        repository.update_node(node)
-        effects.append(f"node_type:{node.id}")
+        if node:
+            node.node_type = node_type
+            node.review_status = ReviewStatus.EDITED if edited_payload else ReviewStatus.ACCEPTED
+            repository.update_node(node)
+            effects.append(f"node_type:{node.id}")
+        else:
+            content = str(payload.get("content") or "").strip()
+            if not content:
+                raise ValueError("Accepted candidate node suggestion requires payload.content")
+            tags = payload.get("tags")
+            source_text = str(payload.get("source_text") or "").strip() or None
+            new_node = Node(
+                content=content,
+                node_type=node_type,
+                title=str(payload.get("title") or _short_title(content)).strip() or None,
+                tags=_clean_tags(tags if isinstance(tags, list) else []),
+                source_text=source_text,
+                provenance=SourceProvenance(
+                    source_url=payload.get("source_url"),
+                    source_type=payload.get("source_type"),
+                    source_text=source_text,
+                ) if (payload.get("source_url") or payload.get("source_type") or source_text) else None,
+                metadata={
+                    "suggested_by": payload.get("suggested_by") or proposal.origin.value,
+                    "suggestion_id": proposal.id,
+                    "source_fragment": payload.get("source_fragment"),
+                    "review_source": "suggestion_accept",
+                },
+                trust_status=TrustStatus.CONFIRMED,
+                origin=Origin.USER,
+                review_status=ReviewStatus.ACCEPTED,
+                user_comment=str(payload.get("user_comment") or "").strip() or None,
+            )
+            repository.add_node(new_node)
+            proposal.node_ids.append(new_node.id)
+            effects.append(f"node_created:{new_node.id}")
 
     elif suggestion_type == ProposalType.TAG.value:
         node = repository.get_node(proposal.node_ids[0]) if proposal.node_ids else None
@@ -730,6 +936,41 @@ def _accept_suggestion(repository: GraphRepository, proposal: AgentProposal, edi
 
     proposal.review_status = ReviewStatus.ACCEPTED
     repository.update_proposal(proposal)
+    return effects
+
+
+def _record_suggestion_feedback(
+    repository: GraphRepository,
+    proposal: AgentProposal,
+    action: str,
+    note: Optional[str] = None,
+) -> list[str]:
+    """Persist lightweight suggestion feedback on related nodes for personalization."""
+    effects: list[str] = []
+    for node_id in proposal.node_ids:
+        node = repository.get_node(node_id)
+        if not node:
+            continue
+        feedback_items = node.metadata.get("suggestion_feedback")
+        if not isinstance(feedback_items, list):
+            feedback_items = []
+        feedback_items.append({
+            "suggestion_id": proposal.id,
+            "suggestion_type": _suggestion_type(proposal),
+            "action": action,
+            "note": note,
+            "payload": proposal.payload,
+        })
+        node.metadata["suggestion_feedback"] = feedback_items[-20:]
+        counts = node.metadata.get("suggestion_feedback_counts")
+        if not isinstance(counts, dict):
+            counts = {}
+        key = f"{action}:{_suggestion_type(proposal)}"
+        counts[key] = int(counts.get(key, 0)) + 1
+        node.metadata["suggestion_feedback_counts"] = counts
+        repository.update_node(node)
+        effects.append(f"suggestion_feedback:{node.id}:{action}")
+    proposal.payload["feedback_recorded"] = True
     return effects
 
 
@@ -860,30 +1101,40 @@ async def web_graph():
 @app.post("/api/knowledge", response_model=AddKnowledgeResponse)
 async def add_knowledge(request: AddKnowledgeRequest):
     """
-    Добавить новое знание в систему.
-    
-    Текст будет обработан LLM для извлечения сущностей и связей,
-    которые затем будут сохранены в граф знаний.
+    Добавить исходный текст и создать reviewable LLM-предложения.
+
+    Старый extraction-flow больше не пишет узлы и связи в граф напрямую:
+    пользователь должен принять предложения, прежде чем они станут частью
+    подтверждённого смыслового слоя.
     """
     repository = get_repository()
     llm_service = get_llm_service()
     
     try:
-        # Извлекаем знания и сохраняем в граф
-        fragment = await extract_and_store(
-            text=request.text,
-            repository=repository,
+        fragment = KnowledgeFragment(
+            content=request.text,
             source_type=request.source_type,
             source_url=request.source_url,
-            llm_service=llm_service
         )
+        suggestions = await _build_knowledge_suggestions(repository, fragment, llm_service)
+        fragment.llm_status = getattr(llm_service, "last_status", "skipped")
+        fragment.warnings = list(getattr(llm_service, "last_warnings", []) or [])
+        fragment.errors = list(getattr(llm_service, "last_errors", []) or [])
+        if fragment.llm_status == "succeeded" and not suggestions:
+            fragment.warnings.append("LLM succeeded but produced no accepted review suggestions.")
+
+        repository.add_fragment(fragment)
+        for suggestion in suggestions:
+            repository.add_proposal(suggestion)
+        if repository.storage_path:
+            repository.save()
         
         return AddKnowledgeResponse(
             fragment_id=fragment.id,
-            nodes_created=len(fragment.extracted_nodes),
-            edges_created=len([e for e in repository.get_all_edges() 
-                             if e.metadata.get('source_fragment') == fragment.id]),
+            nodes_created=0,
+            edges_created=0,
             summary=fragment.content[:200] + "..." if len(fragment.content) > 200 else fragment.content,
+            suggestions_created=len(suggestions),
             llm_status=fragment.llm_status,
             warnings=fragment.warnings,
             errors=fragment.errors,
@@ -1108,7 +1359,7 @@ async def generate_node_suggestions(node_id: str):
     if not node:
         raise HTTPException(status_code=404, detail="Node not found")
 
-    suggestions = _build_node_suggestions(repository, node)
+    suggestions = await _build_node_suggestions_with_llm(repository, node)
     for suggestion in suggestions:
         repository.add_proposal(suggestion)
     if suggestions and repository.storage_path:
@@ -1148,6 +1399,7 @@ async def accept_suggestion(suggestion_id: str, request: SuggestionDecisionReque
         effects = _accept_suggestion(repository, proposal, request.payload)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
+    _record_suggestion_feedback(repository, proposal, "accept", note=request.note)
     if request.note:
         proposal.payload["user_comment"] = request.note.strip()
         repository.update_proposal(proposal)
@@ -1170,10 +1422,11 @@ async def reject_suggestion(suggestion_id: str, request: SuggestionDecisionReque
     if request.payload:
         proposal.payload["rejection_feedback"] = request.payload
     proposal.review_status = ReviewStatus.REJECTED
+    effects = _record_suggestion_feedback(repository, proposal, "reject", note=request.note)
     repository.update_proposal(proposal)
     if repository.storage_path:
         repository.save()
-    return _suggestion_response(proposal, effects=[f"suggestion_rejected:{proposal.id}"])
+    return _suggestion_response(proposal, effects=[f"suggestion_rejected:{proposal.id}", *effects])
 
 
 @app.post("/api/edges", response_model=EdgeResponse)

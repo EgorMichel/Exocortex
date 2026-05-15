@@ -5,6 +5,8 @@ from app.llm.extraction import (
     ExtractedEntity,
     ExtractedRelation,
     ExtractionResult,
+    SuggestedItem,
+    SuggestionResult,
     extract_and_store
 )
 
@@ -13,5 +15,7 @@ __all__ = [
     'ExtractedEntity',
     'ExtractedRelation',
     'ExtractionResult',
+    'SuggestedItem',
+    'SuggestionResult',
     'extract_and_store'
 ]

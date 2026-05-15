@@ -582,6 +582,28 @@
       overflow: auto;
     }
 
+    .suggestion-list {
+      display: grid;
+      gap: 8px;
+      max-height: 310px;
+      overflow: auto;
+    }
+
+    .suggestion-item {
+      display: grid;
+      gap: 7px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: var(--surface);
+      padding: 10px;
+    }
+
+    .suggestion-actions {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 8px;
+    }
+
     .strength {
       height: 7px;
       border-radius: 999px;
@@ -930,6 +952,16 @@
       </section>
 
       <section class="section">
+        <div class="row">
+          <span class="label">Suggestions</span>
+          <button id="generateSuggestionsButton" type="button" disabled>Generate</button>
+        </div>
+        <div id="suggestionList" class="suggestion-list">
+          <p class="muted">Select a node to review suggestions.</p>
+        </div>
+      </section>
+
+      <section class="section">
         <span class="label">Memory strength</span>
         <div class="strength"><span id="strengthBar"></span></div>
         <p id="strengthText" class="muted">No node selected.</p>
@@ -972,6 +1004,7 @@
     const state = {
       nodes: [],
       edges: [],
+      suggestions: [],
       stats: null,
       activeTypes: new Set(NODE_TYPES),
       activeEdges: new Set(Object.keys(EDGE_LABELS)),
@@ -990,6 +1023,7 @@
       draggingNode: null,
       panning: null,
       animation: null,
+      loadingSuggestionsFor: null,
     };
 
     const graphStage = document.querySelector("#graphStage");
@@ -1351,6 +1385,67 @@
       document.querySelector("#edgeTargetLabel").textContent = `Target: ${nodeLabel(state.edgeDraft.targetId)}`;
     }
 
+    function suggestionTitle(suggestion) {
+      const payload = suggestion.payload || {};
+      if (suggestion.suggestion_type === "node_title") {
+        return `Title: ${payload.title || "untitled"}`;
+      }
+      if (suggestion.suggestion_type === "node_type") {
+        return `Type: ${payload.node_type || "node"}`;
+      }
+      if (suggestion.suggestion_type === "tag") {
+        return `Tag: #${payload.tag || ""}`;
+      }
+      if (suggestion.suggestion_type === "manual_edge" || suggestion.suggestion_type === "contradiction") {
+        return `${payload.edge_type || "edge"} -> ${nodeLabel(payload.target_id || suggestion.node_ids?.[1])}`;
+      }
+      if (suggestion.suggestion_type === "similar_node") {
+        return `Similar: ${nodeLabel(payload.similar_node_id || suggestion.node_ids?.[1])}`;
+      }
+      if (suggestion.suggestion_type === "duplicate") {
+        return `Duplicate: ${nodeLabel(payload.duplicate_node_id || suggestion.node_ids?.[1])}`;
+      }
+      return suggestion.suggestion_type;
+    }
+
+    function suggestionDetail(suggestion) {
+      const payload = suggestion.payload || {};
+      return payload.reason || payload.source || payload.current_node_type || payload.title || payload.tag || "";
+    }
+
+    function renderSuggestions() {
+      const list = document.querySelector("#suggestionList");
+      const button = document.querySelector("#generateSuggestionsButton");
+      button.disabled = !state.selectedId;
+      if (!state.selectedId) {
+        list.innerHTML = '<p class="muted">Select a node to review suggestions.</p>';
+        return;
+      }
+      if (state.loadingSuggestionsFor === state.selectedId) {
+        list.innerHTML = '<p class="muted">Loading suggestions...</p>';
+        return;
+      }
+      const items = state.suggestions.filter((item) => (
+        Array.isArray(item.node_ids) && item.node_ids.includes(state.selectedId)
+      ));
+      list.innerHTML = items.length
+        ? items.map((item) => `
+          <div class="suggestion-item" data-suggestion-id="${escapeHtml(item.id)}">
+            <div class="row">
+              <span class="badge">${escapeHtml(item.suggestion_type)}</span>
+              <span class="muted">${Number(item.score || 0).toFixed(2)}</span>
+            </div>
+            <h3>${escapeHtml(shorten(suggestionTitle(item), 70))}</h3>
+            <p class="muted">${escapeHtml(shorten(suggestionDetail(item), 120))}</p>
+            <div class="suggestion-actions">
+              <button data-suggestion-action="accept" class="primary" type="button">Accept</button>
+              <button data-suggestion-action="reject" type="button">Reject</button>
+            </div>
+          </div>
+        `).join("")
+        : '<p class="muted">No pending suggestions for this node.</p>';
+    }
+
     function renderInspector() {
       const node = state.nodes.find((item) => item.id === state.selectedId);
       const title = document.querySelector("#selectedTitle");
@@ -1386,6 +1481,8 @@
         sourceText.textContent = "Source text will appear here when the selected node has provenance attached.";
         sourceActions.innerHTML = "";
         edgeList.innerHTML = '<p class="muted">No node selected.</p>';
+        state.suggestions = [];
+        renderSuggestions();
         editTitle.value = "";
         editType.value = "idea";
         editContent.value = "";
@@ -1465,6 +1562,7 @@
           `;
         }).join("")
         : '<p class="muted">This node has no visible relations yet.</p>';
+      renderSuggestions();
     }
 
     function selectNode(nodeId, shouldCenter = false) {
@@ -1477,6 +1575,7 @@
         centerOnNode(node);
       }
       renderGraph();
+      loadSuggestions(nodeId);
     }
 
     function applyTransform() {
@@ -1552,11 +1651,71 @@
         document.querySelector("#newNodeTags").value = "";
         document.querySelector("#newNodeComment").value = "";
         newNodeType.value = "idea";
+        const suggestionPayload = await requestJson(`/api/nodes/${encodeURIComponent(node.id)}/suggestions`, {
+          method: "POST",
+        });
+        state.suggestions = suggestionPayload.suggestions || [];
         await loadGraph(node.id);
       } catch (error) {
         setStatus(error.message, true);
       } finally {
         button.disabled = false;
+      }
+    }
+
+    async function loadSuggestions(nodeId) {
+      if (!nodeId) {
+        state.suggestions = [];
+        renderSuggestions();
+        return;
+      }
+      state.loadingSuggestionsFor = nodeId;
+      renderSuggestions();
+      try {
+        const payload = await requestJson("/api/suggestions?review_status=pending&limit=200");
+        state.suggestions = (payload.suggestions || []).filter((item) => (
+          Array.isArray(item.node_ids) && item.node_ids.includes(nodeId)
+        ));
+      } catch (error) {
+        setStatus(error.message, true);
+      } finally {
+        state.loadingSuggestionsFor = null;
+        renderSuggestions();
+      }
+    }
+
+    async function generateSuggestionsForSelected() {
+      if (!state.selectedId) {
+        setStatus("Select a node first.", true);
+        return;
+      }
+      const button = document.querySelector("#generateSuggestionsButton");
+      button.disabled = true;
+      try {
+        const payload = await requestJson(`/api/nodes/${encodeURIComponent(state.selectedId)}/suggestions`, {
+          method: "POST",
+        });
+        state.suggestions = payload.suggestions || [];
+        setStatus(`${payload.suggestions_generated} suggestions ready for review.`);
+        renderSuggestions();
+      } catch (error) {
+        setStatus(error.message, true);
+      } finally {
+        button.disabled = false;
+      }
+    }
+
+    async function reactToSuggestion(suggestionId, action) {
+      try {
+        await requestJson(`/api/suggestions/${encodeURIComponent(suggestionId)}/${action}`, {
+          method: "POST",
+          body: JSON.stringify({}),
+        });
+        state.suggestions = state.suggestions.filter((item) => item.id !== suggestionId);
+        await loadGraph(state.selectedId);
+        setStatus(`Suggestion ${action === "accept" ? "accepted" : "rejected"}.`);
+      } catch (error) {
+        setStatus(error.message, true);
       }
     }
 
@@ -1794,6 +1953,18 @@
         }
       });
 
+      document.querySelector("#suggestionList").addEventListener("click", (event) => {
+        const button = event.target.closest("[data-suggestion-action]");
+        if (!button) {
+          return;
+        }
+        const item = button.closest("[data-suggestion-id]");
+        if (!item) {
+          return;
+        }
+        reactToSuggestion(item.dataset.suggestionId, button.dataset.suggestionAction);
+      });
+
       document.querySelector("#sourceActions").addEventListener("click", (event) => {
         const button = event.target.closest("#highlightSourceButton");
         if (!button) {
@@ -1819,6 +1990,7 @@
       document.querySelector("#refreshGraph").addEventListener("click", () => loadGraph());
       document.querySelector("#createNodeButton").addEventListener("click", createNodeFromForm);
       document.querySelector("#saveNodeButton").addEventListener("click", saveSelectedNode);
+      document.querySelector("#generateSuggestionsButton").addEventListener("click", generateSuggestionsForSelected);
       document.querySelector("#setEdgeSource").addEventListener("click", () => setEdgeEndpoint("source"));
       document.querySelector("#setEdgeTarget").addEventListener("click", () => setEdgeEndpoint("target"));
       document.querySelector("#createEdgeButton").addEventListener("click", createEdgeFromDraft);

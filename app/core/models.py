@@ -615,3 +615,7 @@ class AgentProposal:
         values['review_status'] = ReviewStatus(values.get('review_status') or ReviewStatus.PENDING.value)
         values['created_at'] = datetime.fromisoformat(values['created_at'])
         return cls(**values)
+
+
+class Suggestion(AgentProposal):
+    """Stage 4 product name for a reviewable proposal."""

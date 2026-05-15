@@ -4,12 +4,12 @@
 
 ## Общий статус
 
-**Текущий этап:** после Этапа 3 + архитектурный рефакторинг из `REFACTORING_PLAN.md`.  
-**Следующий рекомендуемый фокус:** полноценный review queue для LLM-предложений при добавлении.
+**Текущий этап:** после Этапа 4 + архитектурный рефакторинг из `REFACTORING_PLAN.md`.
+**Следующий рекомендуемый фокус:** полноценный review queue / Suggestions-интерфейс поверх общей очереди предложений.
 
 Новая базовая модель данных уже приведена к MVP 2-парадигме: старые типы узлов и ручных связей удалены из продуктовой модели, manual capture создает `quote` и `idea`, semantic similarity больше не подтверждается как generic-связь, а ручные узлы и связи стали основным пользовательским действием через API, `/reader` и `/graph`.
 
-Текущий автоматический тестовый набор: **105 тестов проходят**.
+Текущий автоматический тестовый набор: **108 тестов проходят**.
 
 ## Этап 1. Чистая модель данных ✅ (100%)
 
@@ -149,15 +149,14 @@
 - [x] Добавлены тесты, что legacy-типы не принимаются.
 - [x] Добавлены тесты, что ручные узлы/связи получают `origin=user`, `trust_status=confirmed`, `review_status=accepted`.
 
-## Этап 4. Предложения LLM при добавлении ⏳ (частично, примерно 60%)
+## Этап 4. Предложения LLM при добавлении ✅ (100%)
 
 **Цель:** заменить автоматическое построение графа на подтверждаемые предложения.
-
-Уже есть:
 
 - [x] LLM extraction ограничен MVP 2-типами.
 - [x] LLM-created nodes/edges помечаются как `suggested/pending`, а не как полностью подтвержденные пользовательские решения.
 - [x] Есть модель `AgentProposal` с типами `proposed_edge`, `proposed_tag`, `possible_duplicate`, `possible_contradiction`, `reminder`.
+- [x] Добавлена продуктовая модель-алиас `Suggestion` поверх reviewable proposal.
 - [x] Есть JSON-хранилище предложений `.proposals.json`.
 - [x] Агент сохраняет hidden connections как proposals без создания edge.
 - [x] Добавлены stage-4 типы proposals/suggestions:
@@ -175,14 +174,23 @@
   - `POST /api/suggestions/{suggestion_id}/reject`.
 - [x] Принятие `node_title`, `node_type`, `tag` применяет изменение к узлу.
 - [x] Принятие `manual_edge` и `contradiction` создаёт подтверждённую manual-связь с `origin=user` и `metadata.suggested_by`.
+- [x] Принятие candidate-node предложения из `/api/knowledge` создаёт подтверждённый пользовательский узел с `metadata.suggested_by=llm`.
 - [x] Отклонение сохраняет feedback в payload предложения.
+- [x] `/api/knowledge` переписан: сохраняет `KnowledgeFragment` и создаёт reviewable suggestions, но не пишет nodes/edges в граф напрямую.
+- [x] Добавлен отдельный LLM prompt для предложений по существующему узлу и по raw text, без graph writes.
+- [x] `/api/nodes/{node_id}/suggestions` использует LLM-first generation и локальный heuristic fallback.
+- [x] В `/graph` добавлен review flow для pending suggestions у выбранного узла:
+  - генерация предложений;
+  - показ pending items;
+  - accept/reject;
+  - автоматическая генерация после ручного создания node.
+- [x] Feedback по accept/reject сохраняется в metadata связанных узлов как легкий сигнал персонализации.
+- [x] Повторная генерация учитывает отклоненные suggestions и не предлагает тот же rejected tag/edge target повторно.
 
-Еще не сделано:
+Критерий готовности:
 
-- [ ] `/api/knowledge` еще остается extraction endpoint и не переписан в полноценный suggestion flow.
-- [ ] Генерация предложений пока базовая локальная/эвристическая, без нового LLM prompt для редактируемых предложений.
-- [ ] Нет UI review flow для предложений при добавлении.
-- [ ] Нет feedback-персонализации на основе отклоненных LLM suggestions.
+- [x] После добавления узла пользователь видит предложения LLM/heuristic fallback и сам решает, что попадет в смысловой слой графа.
+- [x] Старый `/api/knowledge` больше не создает неподтвержденные узлы/связи напрямую.
 
 ## Этап 5. Служебные связи и визуальное разделение слоев ⏳ (частично, примерно 55%)
 
@@ -278,14 +286,14 @@ python -m app.cli clear
 
 - `source_text` сейчас является контекстом происхождения знания; source хранится как provenance-привязка, а не как автоматически создаваемый смысловой `source`-узел.
 - `tags` уже есть в модели; `/reader` и `/graph` позволяют вводить пользовательские теги вручную.
-- `/api/knowledge` всё ещё существует как extraction/import endpoint; теперь он честно возвращает `llm_status`, `warnings`, `errors`, но по плану Этапа 4 его нужно переписать в полноценный источник LLM-предложений.
+- `/api/knowledge` теперь является source-to-suggestions endpoint: он сохраняет fragment и pending proposals, а подтвержденный граф меняется только после accept.
 
 ## Последняя проверка
 
 - `venv\Scripts\python -m pytest -q`
 - `venv\Scripts\python -m compileall app`
 - `venv\Scripts\python -m mypy app`
-- Результат: `105 passed`, compileall ok, mypy без ошибок
+- Результат: `108 passed`, compileall ok, mypy без ошибок
 
 ## Последнее обновление
 

@@ -9,6 +9,7 @@ from app.api import routes
 from app.config import load_settings
 from app.core.models import EdgeType, Node, NodeType, utc_now
 from app.core.repository import GraphRepository
+from app.llm.extraction import SuggestedItem, SuggestionResult
 
 
 class _InteractiveStdin(io.StringIO):
@@ -180,6 +181,75 @@ def test_api_add_knowledge_uses_configured_storage(monkeypatch, tmp_path):
     payload = response.json()
     assert payload["nodes_created"] == 0
     assert storage_path.with_suffix(".gexf").exists()
+
+
+def test_api_knowledge_creates_reviewable_suggestions_without_graph_writes(monkeypatch, tmp_path):
+    storage_path = tmp_path / "api_knowledge_suggestions_graph"
+    monkeypatch.setenv("STORAGE_PATH", str(storage_path))
+    _reset_route_state()
+
+    class FakeSuggestionLLM:
+        last_status = "skipped"
+        last_warnings = []
+        last_errors = []
+
+        async def suggest_for_text(self, text, source_type="manual", source_url=None):
+            self.last_status = "succeeded"
+            return SuggestionResult(
+                suggestions=[
+                    SuggestedItem(
+                        type="node_type",
+                        payload={
+                            "content": "Python helps automate repeatable work.",
+                            "title": "Python automation",
+                            "node_type": "fact",
+                            "tags": ["python", "automation"],
+                            "source_text": text,
+                        },
+                        score=0.82,
+                    )
+                ],
+                summary="Reviewable candidate node.",
+            )
+
+    routes._llm_service = FakeSuggestionLLM()
+    client = TestClient(routes.app)
+    response = client.post(
+        "/api/knowledge",
+        json={
+            "text": "Python helps automate repeatable work.",
+            "source_type": "note",
+            "source_url": "local:notes.md",
+        },
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["nodes_created"] == 0
+    assert payload["edges_created"] == 0
+    assert payload["suggestions_created"] == 1
+    assert payload["llm_status"] == "succeeded"
+
+    repo = GraphRepository(storage_path=str(storage_path))
+    assert repo.get_all_nodes() == []
+    assert repo.get_all_edges() == []
+    assert len(repo.get_all_fragments()) == 1
+    suggestions = repo.get_all_proposals()
+    assert len(suggestions) == 1
+    assert suggestions[0].proposal_type.value == "node_type"
+    assert suggestions[0].payload["source_fragment"] == payload["fragment_id"]
+
+    accept_response = client.post(f"/api/suggestions/{suggestions[0].id}/accept", json={})
+    assert accept_response.status_code == 200
+    assert accept_response.json()["effects"][0].startswith("node_created:")
+
+    repo = GraphRepository(storage_path=str(storage_path))
+    nodes = repo.get_all_nodes()
+    assert len(nodes) == 1
+    assert nodes[0].origin.value == "user"
+    assert nodes[0].trust_status.value == "confirmed"
+    assert nodes[0].metadata["suggested_by"] == "llm"
+    assert nodes[0].metadata["source_fragment"] == payload["fragment_id"]
 
 
 def test_api_agent_analyze_generates_digest(monkeypatch, tmp_path):
@@ -686,6 +756,20 @@ def test_api_suggestions_generate_accept_and_reject(monkeypatch, tmp_path):
     assert reject_response.status_code == 200
     assert reject_response.json()["review_status"] == "rejected"
     assert reject_response.json()["payload"]["rejection_note"] == "Not my vocabulary"
+
+    repo = GraphRepository(storage_path=str(storage_path))
+    updated_node = repo.get_node(node.id)
+    assert updated_node.metadata["suggestion_feedback_counts"]["reject:tag"] == 1
+    rejected_tag = tag_suggestion["payload"]["tag"]
+
+    regenerate_response = client.post(f"/api/nodes/{node.id}/suggestions")
+    assert regenerate_response.status_code == 200
+    regenerated_tags = [
+        item["payload"]["tag"]
+        for item in regenerate_response.json()["suggestions"]
+        if item["suggestion_type"] == "tag"
+    ]
+    assert rejected_tag not in regenerated_tags
 
 
 def test_api_accept_manual_edge_suggestion_creates_user_edge(monkeypatch, tmp_path):

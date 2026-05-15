@@ -16,10 +16,12 @@ from app.core.models import (
     Edge,
     EdgeLayer,
     EdgeType,
+    AgentProposal,
     KnowledgeFragment,
     Node,
     NodeType,
     Origin,
+    ProposalType,
     ReviewStatus,
     TrustStatus,
     coerce_edge_type,
@@ -48,6 +50,31 @@ class ExtractionResult(BaseModel):
     entities: List[ExtractedEntity] = Field(default_factory=list)
     relations: List[ExtractedRelation] = Field(default_factory=list)
     summary: str = Field(default="", description="Краткое содержание текста")
+
+
+class SuggestedItem(BaseModel):
+    """One reviewable LLM suggestion before it is persisted as a proposal."""
+    type: str = Field(description="Suggestion type")
+    node_ids: List[str] = Field(default_factory=list)
+    payload: Dict[str, Any] = Field(default_factory=dict)
+    score: float = Field(default=0.5)
+
+
+class SuggestionResult(BaseModel):
+    """LLM-generated suggestions that still require user review."""
+    suggestions: List[SuggestedItem] = Field(default_factory=list)
+    summary: str = Field(default="")
+
+
+STAGE_4_SUGGESTION_TYPES = {
+    ProposalType.NODE_TITLE.value,
+    ProposalType.NODE_TYPE.value,
+    ProposalType.TAG.value,
+    ProposalType.SIMILAR_NODE.value,
+    ProposalType.MANUAL_EDGE.value,
+    ProposalType.DUPLICATE.value,
+    ProposalType.CONTRADICTION.value,
+}
 
 
 class LLMService:
@@ -169,6 +196,116 @@ Rules:
 Respond in JSON format only.
 """
 
+    def _get_node_suggestion_prompt(self, node: Node, related_nodes: Optional[List[Node]] = None) -> str:
+        """Create a prompt for reviewable suggestions about an existing node."""
+        related_nodes = related_nodes or []
+        related_payload = [
+            {
+                "id": item.id,
+                "title": item.title,
+                "type": item.node_type.value,
+                "content": item.content[:800],
+                "tags": item.tags,
+            }
+            for item in related_nodes[:8]
+        ]
+        return f"""
+You are a knowledge graph review assistant. Suggest improvements for one
+existing user-created node. You must not create graph nodes or edges directly.
+Return only reviewable suggestions that the user can accept, reject, or edit.
+
+All human-readable JSON values must be written in Russian when possible.
+Keep JSON keys and enum values exactly as specified.
+
+Node:
+{{
+  "id": "{node.id}",
+  "title": {json.dumps(node.title, ensure_ascii=False)},
+  "type": "{node.node_type.value}",
+  "content": {json.dumps(node.content, ensure_ascii=False)},
+  "tags": {json.dumps(node.tags, ensure_ascii=False)}
+}}
+
+Candidate related nodes:
+{json.dumps(related_payload, ensure_ascii=False, indent=2)}
+
+Return JSON with this exact structure:
+{{
+  "suggestions": [
+    {{
+      "type": "node_title|node_type|tag|similar_node|manual_edge|duplicate|contradiction",
+      "node_ids": ["existing-node-id"],
+      "payload": {{}},
+      "score": 0.8
+    }}
+  ],
+  "summary": "short review summary"
+}}
+
+Payload rules:
+- node_title: {{"title": "short title"}}
+- node_type: {{"node_type": "idea|fact|quote|question|conclusion|source", "current_node_type": "{node.node_type.value}"}}
+- tag: {{"tag": "short tag"}}
+- similar_node: {{"similar_node_id": "existing-node-id", "reason": "why"}}
+- manual_edge: {{"source_id": "{node.id}", "target_id": "existing-node-id", "edge_type": "used_in|derived_from|contradicts", "reason": "why", "suggested_by": "llm"}}
+- duplicate: {{"duplicate_node_id": "existing-node-id", "reason": "why"}}
+- contradiction: {{"source_id": "{node.id}", "target_id": "existing-node-id", "edge_type": "contradicts", "reason": "why", "suggested_by": "llm"}}
+
+Rules:
+- Use only the listed suggestion types.
+- For edge-like suggestions, use only existing node IDs from the candidate list.
+- Do not use generic relatedness as a manual edge; use similar_node instead.
+- Prefer 1-5 high-confidence suggestions over many weak ones.
+- Return ONLY valid JSON, no additional text.
+"""
+
+    def _get_text_suggestion_prompt(self, text: str, source_type: str = "manual", source_url: Optional[str] = None) -> str:
+        """Create a prompt that turns free text into reviewable suggestions only."""
+        return f"""
+You are a knowledge graph review assistant. The user added raw text, but the
+system must not automatically build the semantic graph. Produce reviewable
+suggestions only; the user will decide what becomes a confirmed node or edge.
+
+All human-readable JSON values must be written in Russian when possible.
+Keep JSON keys and enum values exactly as specified.
+
+Source:
+{{
+  "source_type": {json.dumps(source_type, ensure_ascii=False)},
+  "source_url": {json.dumps(source_url, ensure_ascii=False)}
+}}
+
+Text:
+{text}
+
+Return JSON with this exact structure:
+{{
+  "suggestions": [
+    {{
+      "type": "node_type",
+      "node_ids": [],
+      "payload": {{
+        "content": "candidate node content",
+        "title": "short title",
+        "node_type": "idea|fact|quote|question|conclusion|source",
+        "tags": ["tag"],
+        "source_text": "supporting source excerpt"
+      }},
+      "score": 0.8
+    }}
+  ],
+  "summary": "short review summary"
+}}
+
+Rules:
+- Do not create nodes or edges directly.
+- Use node_type suggestions with node_ids=[] for candidate nodes from this text.
+- Use only MVP node types: idea, fact, quote, question, conclusion, source.
+- Prefer 1-5 standalone candidate nodes.
+- Do not create source nodes automatically unless the source itself is clearly the user's object of analysis.
+- Return ONLY valid JSON, no additional text.
+"""
+
     async def extract_knowledge(self, text: str) -> ExtractionResult:
         """
         Извлечь знания из текста с помощью LLM.
@@ -233,6 +370,107 @@ Respond in JSON format only.
             self.last_errors = [str(e)]
             return ExtractionResult()
 
+    async def suggest_for_node(self, node: Node, related_nodes: Optional[List[Node]] = None) -> SuggestionResult:
+        """Generate reviewable suggestions for an existing node."""
+        if not self.client:
+            print("LLM suggestions skipped: no LLM client configured.")
+            self.last_status = "skipped"
+            self.last_warnings = ["LLM client is not configured."]
+            self.last_errors = []
+            return SuggestionResult()
+
+        try:
+            prompt = self._get_node_suggestion_prompt(node, related_nodes=related_nodes)
+            response = await self.client.chat.completions.create(
+                model=self.model,
+                messages=[
+                    {
+                        "role": "system",
+                        "content": (
+                            "You are a review suggestion assistant. "
+                            "Never create graph objects directly. "
+                            "Always respond with valid JSON only."
+                        ),
+                    },
+                    {"role": "user", "content": prompt},
+                ],
+                temperature=0.2,
+                max_tokens=4000,
+                response_format={"type": "json_object"},
+            )
+            choice = response.choices[0]
+            result_text = choice.message.content
+            if not isinstance(result_text, str) or not result_text.strip():
+                finish_reason = getattr(choice, "finish_reason", None) or "unknown"
+                raise ValueError(
+                    "LLM suggestion response did not contain text content "
+                    f"(finish_reason={finish_reason})"
+                )
+            result = self._coerce_suggestion_result(self._parse_json_response(result_text.strip()))
+            self.last_status = "succeeded"
+            self.last_warnings = []
+            self.last_errors = []
+            return result
+        except Exception as e:
+            print(f"Error during LLM suggestions: {e}")
+            self.last_status = "failed"
+            self.last_warnings = []
+            self.last_errors = [str(e)]
+            return SuggestionResult()
+
+    async def suggest_for_text(
+        self,
+        text: str,
+        source_type: str = "manual",
+        source_url: Optional[str] = None,
+    ) -> SuggestionResult:
+        """Generate reviewable candidate-node suggestions from raw text."""
+        if not self.client:
+            print("LLM suggestions skipped: no LLM client configured.")
+            self.last_status = "skipped"
+            self.last_warnings = ["LLM client is not configured."]
+            self.last_errors = []
+            return SuggestionResult()
+
+        try:
+            prompt = self._get_text_suggestion_prompt(text, source_type=source_type, source_url=source_url)
+            response = await self.client.chat.completions.create(
+                model=self.model,
+                messages=[
+                    {
+                        "role": "system",
+                        "content": (
+                            "You are a review suggestion assistant. "
+                            "Never write confirmed graph nodes or edges. "
+                            "Always respond with valid JSON only."
+                        ),
+                    },
+                    {"role": "user", "content": prompt},
+                ],
+                temperature=0.2,
+                max_tokens=5000,
+                response_format={"type": "json_object"},
+            )
+            choice = response.choices[0]
+            result_text = choice.message.content
+            if not isinstance(result_text, str) or not result_text.strip():
+                finish_reason = getattr(choice, "finish_reason", None) or "unknown"
+                raise ValueError(
+                    "LLM suggestion response did not contain text content "
+                    f"(finish_reason={finish_reason})"
+                )
+            result = self._coerce_suggestion_result(self._parse_json_response(result_text.strip()))
+            self.last_status = "succeeded"
+            self.last_warnings = []
+            self.last_errors = []
+            return result
+        except Exception as e:
+            print(f"Error during LLM suggestions: {e}")
+            self.last_status = "failed"
+            self.last_warnings = []
+            self.last_errors = [str(e)]
+            return SuggestionResult()
+
     def _parse_json_response(self, result_text: str) -> Dict[str, Any]:
         """Parse JSON, including responses wrapped in prose or code fences."""
         try:
@@ -276,6 +514,40 @@ Respond in JSON format only.
             relations=relations,
             summary=summary,
         )
+
+    def _coerce_suggestion_result(self, result_data: Dict[str, Any]) -> SuggestionResult:
+        """Build a suggestion result while skipping malformed LLM items."""
+        if not isinstance(result_data, dict):
+            return SuggestionResult()
+
+        suggestions = []
+        for item in result_data.get("suggestions", []):
+            if not isinstance(item, dict):
+                continue
+            suggestion_type = str(item.get("type") or item.get("suggestion_type") or "").strip()
+            if suggestion_type not in STAGE_4_SUGGESTION_TYPES:
+                continue
+            payload = item.get("payload")
+            if not isinstance(payload, dict):
+                payload = {}
+            node_ids = item.get("node_ids")
+            if not isinstance(node_ids, list):
+                node_ids = []
+            try:
+                score = float(item.get("score", 0.5))
+            except (TypeError, ValueError):
+                score = 0.5
+            suggestions.append(SuggestedItem(
+                type=suggestion_type,
+                node_ids=[str(node_id) for node_id in node_ids],
+                payload=payload,
+                score=max(0.0, min(1.0, score)),
+            ))
+
+        summary = result_data.get("summary", "")
+        if not isinstance(summary, str):
+            summary = ""
+        return SuggestionResult(suggestions=suggestions, summary=summary)
     
     def extraction_result_to_graph_elements(
         self, 

@@ -21,10 +21,17 @@
   - Выбор MVP 2-типа и ввод тегов в `/reader`; теги сохраняются в стандартное поле `tags`
   - Ручные узлы и связи при создании получают `origin=user`, `trust_status=confirmed`, `review_status=accepted`
 - **MVP 2 Этап 4: базовый lifecycle предложений**:
+  - Продуктовая модель `Suggestion` добавлена как reviewable alias поверх `AgentProposal`
+  - Отдельные LLM prompts для предложений по существующему узлу и по raw text: LLM возвращает reviewable JSON, а не прямые записи графа
+  - `/api/knowledge` переписан в source-to-suggestions flow: сохраняет `KnowledgeFragment` и pending proposals, но не создает nodes/edges напрямую
+  - Candidate-node suggestion из `/api/knowledge` при accept создает подтвержденный пользовательский узел с `metadata.suggested_by=llm`
   - API `POST /api/nodes/{node_id}/suggestions` генерирует reviewable предложения для title/type/tag/similar/manual edge/duplicate/contradiction
   - API `GET /api/suggestions`, `POST /api/suggestions/{suggestion_id}/accept`, `POST /api/suggestions/{suggestion_id}/reject`
+  - `POST /api/nodes/{node_id}/suggestions` использует LLM-first generation и локальный эвристический fallback
   - Принятие предложений title/type/tag обновляет узел; принятие manual edge/contradiction создаёт подтверждённую ручную связь с `suggested_by`
-  - Отклонение предложения сохраняет feedback в payload и переводит proposal в `review_status=rejected`
+  - Отклонение предложения сохраняет feedback в payload и metadata связанных узлов для будущей персонализации
+  - `/graph` показывает pending suggestions для выбранного узла, умеет генерировать, принимать и отклонять предложения
+  - После ручного создания узла в `/graph` предложения генерируются сразу и попадают в review flow
 - **Запуск приложения**:
   - Точка входа `python -m app.main` для FastAPI-сервера
   - CLI `python -m app.cli` с командами `add`, `stats`, `list`, `search`, `forgotten`, `clear`
@@ -113,7 +120,7 @@
   - Тесты оптимизированного анализа: переиспользование candidate pairs, ранний skip без LLM-клиента, батчинг противоречий и пропуск неизменившихся пар
   - Тесты ручных мыслей с `source_text`, reader UI и повторного анализа при изменении источника
   - Тесты ручного создания/редактирования узлов и связей, reader tags/defaults и отказа от legacy-типов
-  - Текущий набор: 103 автоматических теста
+  - Текущий набор: 108 автоматических тестов
 
 ### Изменено
 - **Breaking change / MVP data model**: Ручные связи приведены к MVP-набору `used_in`, `derived_from`, `contradicts`; legacy-типы вроде `related_to`, `supports`, `example_of`, `part_of` и `similar_to` больше не являются валидными.
@@ -122,7 +129,8 @@
 - **Graph UI**: Списки фильтров и визуальные классы обновлены под MVP 2-типы узлов и связей; интерфейс позволяет создавать узлы, редактировать выбранный узел и создавать ручную связь между двумя выбранными узлами.
 - **LLM extraction**: Prompt/schema используют `used_in`, `derived_from`, `contradicts`; автоматические `source`-узлы запрещены и отбрасываются.
 - **API responses**: Узлы и связи возвращают стандартизированные поля `trust_status`, `origin`, `review_status`, `user_comment`; связи также возвращают `edge_layer`, узлы возвращают `title` и `tags`.
-- **API responses**: `/api/knowledge` и `/api/sources` возвращают `llm_status`, `warnings`, `errors`.
+- **API responses**: `/api/knowledge` и `/api/sources` возвращают `llm_status`, `warnings`, `errors`; `/api/knowledge` дополнительно возвращает `suggestions_created`.
+- **Knowledge import semantics**: `/api/knowledge` больше не является extraction endpoint, который пишет suggested nodes/edges в граф; он создает только reviewable suggestions.
 - **API responses**: Узлы также возвращают структурированную provenance-привязку; `source_text` сохранён для совместимости.
 - **Proactive analysis**: Поиск похожих пар, embeddings, fingerprints и LLM-проверка противоречий учитывают `source_text` вместе с `content`
 - **LLM extraction**: Удалён алгоритмический fallback; без LLM-клиента или при ошибке ответа извлечение возвращает пустой результат
