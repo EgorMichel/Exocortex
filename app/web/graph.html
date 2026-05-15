@@ -810,6 +810,14 @@
       </section>
 
       <section class="section">
+        <div class="row">
+          <span class="label">Edge layers</span>
+          <button id="allLayers" type="button">All</button>
+        </div>
+        <div id="layerFilters" class="chips" aria-label="Edge layer filters"></div>
+      </section>
+
+      <section class="section">
         <span class="label">Create node</span>
         <div class="form-box form-grid">
           <label>
@@ -1000,6 +1008,11 @@
       derived_from: "derived_from",
       contradicts: "contradicts",
     };
+    const EDGE_LAYERS = {
+      manual: "Manual",
+      service: "Service",
+      suggested: "Suggested",
+    };
 
     const state = {
       nodes: [],
@@ -1008,6 +1021,7 @@
       stats: null,
       activeTypes: new Set(NODE_TYPES),
       activeEdges: new Set(Object.keys(EDGE_LABELS)),
+      activeLayers: new Set(Object.keys(EDGE_LAYERS)),
       selectedId: null,
       highlightedSourceId: null,
       edgeDraft: {
@@ -1035,6 +1049,7 @@
     const emptyState = document.querySelector("#emptyState");
     const typeFilters = document.querySelector("#typeFilters");
     const edgeFilters = document.querySelector("#edgeFilters");
+    const layerFilters = document.querySelector("#layerFilters");
     const resultList = document.querySelector("#resultList");
     const searchInput = document.querySelector("#searchInput");
     const themeToggle = document.querySelector("#themeToggle");
@@ -1146,6 +1161,15 @@
       }
     }
 
+    function initialSelectedNodeId() {
+      try {
+        const params = new URLSearchParams(window.location.search);
+        return params.get("node_id") || params.get("selected") || null;
+      } catch {
+        return null;
+      }
+    }
+
     async function requestJson(url, options = {}) {
       const response = await fetch(url, { headers: { "Content-Type": "application/json" }, ...options });
       if (!response.ok) {
@@ -1173,6 +1197,10 @@
 
       edgeFilters.innerHTML = Object.keys(EDGE_LABELS).map((type) => (
         `<span class="chip ${state.activeEdges.has(type) ? "active" : ""}" data-edge-type="${type}">${EDGE_LABELS[type]}</span>`
+      )).join("");
+
+      layerFilters.innerHTML = Object.entries(EDGE_LAYERS).map(([layer, label]) => (
+        `<span class="chip ${state.activeLayers.has(layer) ? "active" : ""}" data-edge-layer="${layer}">${label}</span>`
       )).join("");
     }
 
@@ -1231,6 +1259,7 @@
         visibleIds.has(edge.source_id)
         && visibleIds.has(edge.target_id)
         && state.activeEdges.has(edge.edge_type)
+        && state.activeLayers.has(edge.edge_layer || "manual")
       ));
       return { visibleNodes, visibleEdges };
     }
@@ -1312,6 +1341,10 @@
     function relatedIds(nodeId) {
       const ids = new Set();
       state.edges.forEach((edge) => {
+        const layer = edge.edge_layer || "manual";
+        if (!state.activeEdges.has(edge.edge_type) || !state.activeLayers.has(layer)) {
+          return;
+        }
         if (edge.source_id === nodeId) {
           ids.add(edge.target_id);
         }
@@ -1842,6 +1875,21 @@
         rerenderWithLayout();
       });
 
+      layerFilters.addEventListener("click", (event) => {
+        const chip = event.target.closest("[data-edge-layer]");
+        if (!chip) {
+          return;
+        }
+        const layer = chip.dataset.edgeLayer;
+        if (state.activeLayers.has(layer)) {
+          state.activeLayers.delete(layer);
+        } else {
+          state.activeLayers.add(layer);
+        }
+        renderFilterChips();
+        rerenderWithLayout();
+      });
+
       document.querySelector("#allTypes").addEventListener("click", () => {
         state.activeTypes = new Set(NODE_TYPES);
         renderFilterChips();
@@ -1850,6 +1898,12 @@
 
       document.querySelector("#allEdges").addEventListener("click", () => {
         state.activeEdges = new Set(Object.keys(EDGE_LABELS));
+        renderFilterChips();
+        rerenderWithLayout();
+      });
+
+      document.querySelector("#allLayers").addEventListener("click", () => {
+        state.activeLayers = new Set(Object.keys(EDGE_LAYERS));
         renderFilterChips();
         rerenderWithLayout();
       });
@@ -2049,7 +2103,7 @@
     renderFilterChips();
     setupEvents();
     applyTheme(loadTheme());
-    loadGraph();
+    loadGraph(initialSelectedNodeId());
   </script>
 </body>
 </html>

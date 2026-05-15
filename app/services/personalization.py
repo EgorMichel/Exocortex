@@ -33,6 +33,7 @@ class FeedbackAction(Enum):
     REFINE = "refine"
     USEFUL = "useful"
     IGNORE = "ignore"
+    DEFER = "defer"
 
 
 @dataclass
@@ -250,15 +251,18 @@ class PersonalizationService:
                 FeedbackAction.CHOOSE_RIGHT,
                 FeedbackAction.RESOLVED,
                 FeedbackAction.KEEP_BOTH,
+                FeedbackAction.DEFER,
             },
             InsightType.HIDDEN_CONNECTION: {
                 FeedbackAction.CONFIRM,
                 FeedbackAction.REJECT,
                 FeedbackAction.REFINE,
+                FeedbackAction.DEFER,
             },
             InsightType.REMINDER: {
                 FeedbackAction.USEFUL,
                 FeedbackAction.IGNORE,
+                FeedbackAction.DEFER,
             },
         }[insight_type]
         if action not in allowed:
@@ -275,6 +279,8 @@ class PersonalizationService:
         note: Optional[str],
         edge_type: Optional[str | EdgeType] = None,
     ) -> list[str]:
+        if action == FeedbackAction.DEFER:
+            return [f"insight_deferred:{insight.id}"]
         if insight.insight_type == InsightType.CONTRADICTION:
             return self._apply_contradiction_feedback(insight, action, note)
         if insight.insight_type == InsightType.HIDDEN_CONNECTION:

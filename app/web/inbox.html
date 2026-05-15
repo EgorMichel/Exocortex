@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Exocortex Inbox</title>
+  <title>Exocortex Review</title>
   <script>
     (() => {
       try {
@@ -358,6 +358,13 @@
       max-height: 120px;
     }
 
+    .payload-editor {
+      flex: 1 1 100%;
+      min-height: 76px;
+      font-family: ui-monospace, SFMono-Regular, Consolas, "Liberation Mono", monospace;
+      font-size: 12px;
+    }
+
     .profile-grid {
       display: grid;
       grid-template-columns: 1fr 1fr;
@@ -465,9 +472,9 @@
 <body>
   <div class="shell">
     <header>
-      <h1>Exocortex Inbox</h1>
+      <h1>Exocortex Review</h1>
       <div class="toolbar">
-        <div class="segmented" aria-label="Inbox filter">
+        <div class="segmented" aria-label="Review filter">
           <button id="pendingFilter" class="active" type="button">Pending</button>
           <button id="allFilter" type="button">All</button>
         </div>
@@ -613,36 +620,63 @@
       return response.json();
     }
 
-    function renderInbox(items) {
+    function payloadText(item) {
+      try {
+        return JSON.stringify(item.payload || {}, null, 2);
+      } catch {
+        return "{}";
+      }
+    }
+
+    function renderReviewItems(items) {
       if (!items.length) {
-        inbox.innerHTML = '<div class="empty">No insights.</div>';
+        inbox.innerHTML = '<div class="empty">No review items.</div>';
         return;
       }
 
       inbox.innerHTML = items.map((item) => {
-        const insight = item.insight;
-        const feedback = item.feedback;
-        const status = feedback ? feedback.action : "pending";
-        const actions = actionsByType[insight.insight_type] || [];
-        const buttons = actions.map(([action, label]) => (
-          `<button type="button" data-insight="${escapeHtml(insight.id)}" data-action="${action}" ${feedback ? "disabled" : ""}>${label}</button>`
-        )).join("");
+        const isSuggestion = item.item_type === "suggestion";
+        const isReviewed = item.status !== "pending" && item.status !== "deferred";
+        const insightActions = actionsByType[item.review_kind] || [];
+        const buttons = isSuggestion
+          ? [
+            ["accept", "Accept"],
+            ["reject", "Reject"],
+            ["defer", "Defer"],
+          ].map(([action, label]) => (
+            `<button type="button" data-suggestion="${escapeHtml(item.id)}" data-action="${action}" ${isReviewed ? "disabled" : ""}>${label}</button>`
+          )).join("")
+          : [
+            ...insightActions,
+            ["defer", "Defer"],
+          ].map(([action, label]) => (
+            `<button type="button" data-insight="${escapeHtml(item.id)}" data-action="${action}" ${isReviewed ? "disabled" : ""}>${label}</button>`
+          )).join("");
+        const openGraph = item.open_graph_url
+          ? `<button type="button" data-open-graph="${escapeHtml(item.open_graph_url)}">Open in Graph</button>`
+          : "";
+        const payloadEditor = isSuggestion
+          ? `<textarea class="note payload-editor" rows="4" data-payload="${escapeHtml(item.id)}" spellcheck="false">${escapeHtml(payloadText(item))}</textarea>`
+          : "";
 
         return `
           <article class="card">
             <div class="row">
               <div class="meta">
-                <span class="badge ${escapeHtml(insight.insight_type)}">${escapeHtml(insight.insight_type)}</span>
-                <span>${escapeHtml(compactId(insight.id))}</span>
-                <span>score ${Number(insight.score || 0).toFixed(3)}</span>
+                <span class="badge ${escapeHtml(item.review_kind)}">${escapeHtml(item.item_type)}</span>
+                <span>${escapeHtml(item.review_kind)}</span>
+                <span>${escapeHtml(compactId(item.id))}</span>
+                <span>score ${Number(item.score || 0).toFixed(3)}</span>
               </div>
-              <span class="status ${feedback ? "" : "pending"}">${escapeHtml(status)}</span>
+              <span class="status ${item.status === "pending" ? "pending" : ""}">${escapeHtml(item.status)}</span>
             </div>
-            <h3>${escapeHtml(insight.title)}</h3>
-            <p class="description">${escapeHtml(insight.description)}</p>
+            <h3>${escapeHtml(item.title)}</h3>
+            <p class="description">${escapeHtml(item.description)}</p>
             <div class="actions">
-              <textarea class="note" rows="1" data-note="${escapeHtml(insight.id)}" placeholder="Note"></textarea>
+              ${payloadEditor}
+              <textarea class="note" rows="1" data-note="${escapeHtml(item.id)}" placeholder="Note"></textarea>
               ${buttons}
+              ${openGraph}
             </div>
           </article>
         `;
@@ -671,10 +705,10 @@
       setMessage("");
       try {
         const [items, profile] = await Promise.all([
-          requestJson(`/api/inbox?include_reacted=${state.includeReacted ? "true" : "false"}`),
+          requestJson(`/api/review?include_reacted=${state.includeReacted ? "true" : "false"}&include_deferred=${state.includeReacted ? "true" : "false"}`),
           requestJson("/api/personalization"),
         ]);
-        renderInbox(items);
+        renderReviewItems(items.items || []);
         renderProfile(profile);
       } catch (error) {
         setMessage(error.message, "error");
@@ -683,10 +717,25 @@
       }
     }
 
+    function editedPayload(reviewItemId) {
+      const editor = document.querySelector(`[data-payload="${CSS.escape(reviewItemId)}"]`);
+      if (!editor) {
+        return {};
+      }
+      const value = editor.value.trim();
+      if (!value) {
+        return {};
+      }
+      return JSON.parse(value);
+    }
+
     async function react(insightId, action) {
       const note = document.querySelector(`[data-note="${CSS.escape(insightId)}"]`)?.value.trim() || null;
       try {
-        await requestJson(`/api/insights/${encodeURIComponent(insightId)}/feedback`, {
+        const url = action === "defer"
+          ? `/api/review/insights/${encodeURIComponent(insightId)}/defer`
+          : `/api/review/insights/${encodeURIComponent(insightId)}/react`;
+        await requestJson(url, {
           method: "POST",
           body: JSON.stringify({ action, note }),
         });
@@ -696,7 +745,33 @@
       }
     }
 
+    async function reactToSuggestion(suggestionId, action) {
+      const note = document.querySelector(`[data-note="${CSS.escape(suggestionId)}"]`)?.value.trim() || null;
+      try {
+        await requestJson(`/api/review/suggestions/${encodeURIComponent(suggestionId)}/${action}`, {
+          method: "POST",
+          body: JSON.stringify({
+            note,
+            payload: action === "accept" ? editedPayload(suggestionId) : {},
+          }),
+        });
+        await load();
+      } catch (error) {
+        setMessage(error.message, "error");
+      }
+    }
+
     inbox.addEventListener("click", (event) => {
+      const graphButton = event.target.closest("button[data-open-graph]");
+      if (graphButton) {
+        window.location.href = graphButton.dataset.openGraph;
+        return;
+      }
+      const suggestionButton = event.target.closest("button[data-suggestion]");
+      if (suggestionButton) {
+        reactToSuggestion(suggestionButton.dataset.suggestion, suggestionButton.dataset.action);
+        return;
+      }
       const button = event.target.closest("button[data-insight]");
       if (!button) {
         return;

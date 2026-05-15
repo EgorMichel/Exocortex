@@ -4,12 +4,12 @@
 
 ## Общий статус
 
-**Текущий этап:** после Этапа 4 + архитектурный рефакторинг из `REFACTORING_PLAN.md`.
+**Текущий этап:** Этап 6 частично реализован поверх Этапа 5 + архитектурного рефакторинга из `REFACTORING_PLAN.md`.
 **Следующий рекомендуемый фокус:** полноценный review queue / Suggestions-интерфейс поверх общей очереди предложений.
 
 Новая базовая модель данных уже приведена к MVP 2-парадигме: старые типы узлов и ручных связей удалены из продуктовой модели, manual capture создает `quote` и `idea`, semantic similarity больше не подтверждается как generic-связь, а ручные узлы и связи стали основным пользовательским действием через API, `/reader` и `/graph`.
 
-Текущий автоматический тестовый набор: **108 тестов проходят**.
+Текущий автоматический тестовый набор: **110 тестов проходят**.
 
 ## Этап 1. Чистая модель данных ✅ (100%)
 
@@ -192,7 +192,7 @@
 - [x] После добавления узла пользователь видит предложения LLM/heuristic fallback и сам решает, что попадет в смысловой слой графа.
 - [x] Старый `/api/knowledge` больше не создает неподтвержденные узлы/связи напрямую.
 
-## Этап 5. Служебные связи и визуальное разделение слоев ⏳ (частично, примерно 55%)
+## Этап 5. Служебные связи и визуальное разделение слоев ✅ (100%)
 
 **Цель:** отделить пользовательский смысл от машинных подсказок.
 
@@ -206,12 +206,14 @@
 - [x] Graph UI показывает `service/suggested` связи приглушённо/пунктиром.
 - [x] Есть repository filtering/navigation tests по слоям.
 
-Еще не сделано:
+- [x] API `/api/edges` фильтрует связи по `edge_layer`.
+- [x] Graph UI фильтрует связи по слою `manual` / `service` / `suggested`.
 
-- [ ] API `/api/edges` не фильтрует связи по layer.
-- [ ] Нет фильтров graph UI по слою доверия.
+Критерий готовности:
 
-## Этап 6. Очередь предложений и новый inbox ⏳ (частично, примерно 35%)
+- [x] Пользователь визуально понимает, где его собственная логика, а где подсказки системы.
+
+## Этап 6. Очередь предложений и новый inbox ⏳ (частично, примерно 70%)
 
 **Цель:** превратить текущий inbox в review queue для развития графа.
 
@@ -224,13 +226,26 @@
 - [x] Hidden connection feedback больше не создает бессмысленную legacy-связь.
 - [x] `Insight` при сохранении дайджеста связывается с `AgentProposal` через `proposal_id`.
 - [x] Contradiction insights сохраняются как `possible_contradiction` proposal.
+- [x] `/app` переименован в продуктовой роли в `Review`.
+- [x] Добавлен единый API `/api/review`, который объединяет `Suggestion`/`AgentProposal` и agent `Insight` в общей очереди.
+- [x] Review item responses содержат `item_type`, `review_kind`, `status`, `payload`, `open_graph_url`.
+- [x] Review UI показывает и suggestions, и insights в одном списке.
+- [x] Для suggestions в Review UI есть `accept`, `reject`, `defer`, `open in graph`.
+- [x] Для suggestions поддержан `edit and accept` через JSON payload editor перед accept.
+- [x] Для insights в Review UI есть прежние реакции, `defer` и `open in graph`.
+- [x] Добавлены Review API aliases:
+  - `POST /api/review/suggestions/{suggestion_id}/accept`;
+  - `POST /api/review/suggestions/{suggestion_id}/reject`;
+  - `POST /api/review/suggestions/{suggestion_id}/defer`;
+  - `POST /api/review/insights/{insight_id}/react`;
+  - `POST /api/review/insights/{insight_id}/defer`.
+- [x] `/graph` умеет открываться с выбранным узлом через `?node_id=...`.
+- [x] Добавлены тесты нового review queue поверх suggestions и insights.
 
 Еще не сделано:
 
-- [ ] Inbox еще не переименован и не переосмыслен как полноценный Review/Suggestions flow.
-- [ ] Нет действий `edit and accept`, `defer`, `open in graph`.
-- [ ] Contradiction flow ещё не имеет отдельного review UI/API.
-- [ ] Нет тестов нового review queue поверх suggestions.
+- [ ] Contradiction flow ещё не имеет специализированного review UI с явным сравнением A/B.
+- [ ] Нет отдельного durable статуса `deferred`; сейчас defer для suggestions хранится в payload, а для insights как feedback action.
 
 ## Этап 7. Внутренние рекомендации и мини-дайджест ⏳ (частично, примерно 35%)
 
@@ -293,7 +308,7 @@ python -m app.cli clear
 - `venv\Scripts\python -m pytest -q`
 - `venv\Scripts\python -m compileall app`
 - `venv\Scripts\python -m mypy app`
-- Результат: `108 passed`, compileall ok, mypy без ошибок
+- Результат: `110 passed`, compileall ok, mypy без ошибок
 
 ## Последнее обновление
 

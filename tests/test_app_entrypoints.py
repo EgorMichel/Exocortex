@@ -7,7 +7,7 @@ from app import cli
 from app.agents.insights import Digest, Insight, InsightStore, InsightType
 from app.api import routes
 from app.config import load_settings
-from app.core.models import EdgeType, Node, NodeType, utc_now
+from app.core.models import AgentProposal, Edge, EdgeLayer, EdgeType, Node, NodeType, ProposalType, utc_now
 from app.core.repository import GraphRepository
 from app.llm.extraction import SuggestedItem, SuggestionResult
 
@@ -99,8 +99,8 @@ def test_web_app_is_served(monkeypatch, tmp_path):
     assert root_response.status_code == 200
     assert root_response.json()["app"] == "/app"
     assert app_response.status_code == 200
-    assert "Exocortex Inbox" in app_response.text
-    assert "/api/inbox" in app_response.text
+    assert "Exocortex Review" in app_response.text
+    assert "/api/review" in app_response.text
     assert 'id="themeToggle"' in app_response.text
     assert "exocortex-theme" in app_response.text
     assert ':root[data-theme="dark"]' in app_response.text
@@ -162,6 +162,8 @@ def test_graph_app_is_served(monkeypatch, tmp_path):
     assert 'id="saveNodeButton"' in graph_response.text
     assert 'id="createEdgeButton"' in graph_response.text
     assert 'id="selectedTags"' in graph_response.text
+    assert 'id="layerFilters"' in graph_response.text
+    assert "EDGE_LAYERS" in graph_response.text
 
 
 def test_api_add_knowledge_uses_configured_storage(monkeypatch, tmp_path):
@@ -632,6 +634,50 @@ def test_api_create_and_update_manual_edge(monkeypatch, tmp_path):
     assert edge.edge_type.value == "contradicts"
 
 
+def test_api_edges_can_filter_by_layer_and_type(monkeypatch, tmp_path):
+    _disable_llm(monkeypatch)
+    storage_path = tmp_path / "api_edge_layers_graph"
+    monkeypatch.setenv("STORAGE_PATH", str(storage_path))
+    _reset_route_state()
+
+    repo = GraphRepository(storage_path=str(storage_path))
+    first = Node(content="First", node_type=NodeType.IDEA)
+    second = Node(content="Second", node_type=NodeType.FACT)
+    third = Node(content="Third", node_type=NodeType.CONCLUSION)
+    for node in (first, second, third):
+        repo.add_node(node)
+    manual = Edge(source_id=first.id, target_id=second.id, edge_type=EdgeType.USED_IN)
+    service = Edge(
+        source_id=first.id,
+        target_id=third.id,
+        edge_type=EdgeType.USED_IN,
+        edge_layer=EdgeLayer.SERVICE,
+    )
+    suggested = Edge(
+        source_id=second.id,
+        target_id=third.id,
+        edge_type=EdgeType.CONTRADICTS,
+        edge_layer=EdgeLayer.SUGGESTED,
+    )
+    for edge in (manual, service, suggested):
+        repo.add_edge(edge)
+    repo.save()
+
+    client = TestClient(routes.app)
+    service_response = client.get("/api/edges?edge_layer=service")
+    suggested_contradictions = client.get("/api/edges?edge_layer=suggested&edge_type=contradicts")
+    invalid_response = client.get("/api/edges?edge_layer=automatic")
+
+    assert service_response.status_code == 200
+    assert service_response.json()["total"] == 1
+    assert service_response.json()["edges"][0]["edge_layer"] == "service"
+    assert suggested_contradictions.status_code == 200
+    assert suggested_contradictions.json()["total"] == 1
+    assert suggested_contradictions.json()["edges"][0]["edge_type"] == "contradicts"
+    assert invalid_response.status_code == 400
+    assert invalid_response.json()["detail"] == "Invalid edge_layer: automatic"
+
+
 def test_reader_manual_fragments_keep_defaults_and_tags(monkeypatch, tmp_path):
     _disable_llm(monkeypatch)
     storage_path = tmp_path / "api_reader_tags_graph"
@@ -1033,6 +1079,66 @@ def test_api_inbox_feedback_and_personalization(monkeypatch, tmp_path):
     profile_response = client.get("/api/personalization")
     assert profile_response.status_code == 200
     assert profile_response.json()["positive_feedback"] == 1
+
+
+def test_api_review_queue_combines_suggestions_insights_and_defer(monkeypatch, tmp_path):
+    _disable_llm(monkeypatch)
+    storage_path = tmp_path / "api_review_queue_graph"
+    monkeypatch.setenv("STORAGE_PATH", str(storage_path))
+    routes._repository = None
+    routes._llm_service = None
+    routes._agent = None
+    routes._personalization_service = None
+
+    repo = GraphRepository(storage_path=str(storage_path))
+    node = Node(content="Review queue node", node_type=NodeType.IDEA)
+    repo.add_node(node)
+    suggestion = AgentProposal(
+        proposal_type=ProposalType.TAG,
+        node_ids=[node.id],
+        payload={"tag": "review"},
+        score=0.8,
+    )
+    repo.add_proposal(suggestion)
+    repo.save()
+    insight = Insight(
+        insight_type=InsightType.REMINDER,
+        title="Revisit this node",
+        description=node.content,
+        node_ids=[node.id],
+        score=0.6,
+    )
+    InsightStore(storage_path).save_digest(Digest(insights=[insight]))
+
+    client = TestClient(routes.app)
+    review_response = client.get("/api/review")
+    assert review_response.status_code == 200
+    items = review_response.json()["items"]
+    assert {item["item_type"] for item in items} == {"suggestion", "insight"}
+    assert all(item["open_graph_url"] == f"/graph?node_id={node.id}" for item in items)
+
+    defer_suggestion = client.post(
+        f"/api/review/suggestions/{suggestion.id}/defer",
+        json={"note": "Later"},
+    )
+    defer_insight = client.post(
+        f"/api/review/insights/{insight.id}/defer",
+        json={"note": "Later"},
+    )
+    assert defer_suggestion.status_code == 200
+    assert defer_suggestion.json()["effects"] == [f"suggestion_deferred:{suggestion.id}"]
+    assert defer_insight.status_code == 200
+    assert defer_insight.json()["action"] == "defer"
+
+    pending_after_defer = client.get("/api/review")
+    assert pending_after_defer.status_code == 200
+    assert pending_after_defer.json()["items"] == []
+
+    include_deferred = client.get("/api/review?include_deferred=true&include_reacted=true")
+    assert include_deferred.status_code == 200
+    statuses = {item["id"]: item["status"] for item in include_deferred.json()["items"]}
+    assert statuses[suggestion.id] == "deferred"
+    assert statuses[insight.id] == "defer"
 
 
 def test_cli_inbox_react_and_interests(monkeypatch, tmp_path, capsys):

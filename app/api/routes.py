@@ -31,6 +31,7 @@ from app.core.models import (
     ReviewStatus,
     SourceProvenance,
     TrustStatus,
+    utc_now,
 )
 from app.core.repository import GraphRepository
 from app.llm.extraction import LLMService, SuggestionResult
@@ -332,6 +333,30 @@ class SuggestionDecisionRequest(BaseModel):
     payload: Dict[str, Any] = Field(default_factory=dict, description="Отредактированные значения перед accept")
 
 
+class ReviewItemResponse(BaseModel):
+    """Единый элемент очереди Review: suggestion или insight."""
+    id: str
+    item_type: str
+    review_kind: str
+    title: str
+    description: str
+    node_ids: List[str]
+    edge_ids: List[str]
+    payload: Dict[str, Any] = Field(default_factory=dict)
+    score: float
+    origin: str
+    status: str
+    feedback: Optional[InsightFeedbackResponse] = None
+    open_graph_url: Optional[str] = None
+    created_at: str
+
+
+class ReviewListResponse(BaseModel):
+    """Единая очередь review items."""
+    items: List[ReviewItemResponse]
+    total: int
+
+
 # === Lifecycle ===
 
 @asynccontextmanager
@@ -502,6 +527,95 @@ def _suggestion_response(proposal: AgentProposal, effects: Optional[List[str]] =
         review_status=proposal.review_status.value,
         effects=effects or [],
         created_at=proposal.created_at.isoformat(),
+    )
+
+
+def _open_graph_url(node_ids: List[str]) -> Optional[str]:
+    return f"/graph?node_id={node_ids[0]}" if node_ids else None
+
+
+def _is_deferred_suggestion(proposal: AgentProposal) -> bool:
+    return bool(proposal.payload.get("review_deferred"))
+
+
+def _suggestion_review_title(proposal: AgentProposal) -> str:
+    payload = proposal.payload
+    suggestion_type = _suggestion_type(proposal)
+    if suggestion_type == ProposalType.NODE_TITLE.value:
+        return f"Title: {payload.get('title') or 'untitled'}"
+    if suggestion_type == ProposalType.NODE_TYPE.value:
+        content = str(payload.get("content") or "").strip()
+        if content:
+            return f"Create {payload.get('node_type') or 'node'}: {_short_title(content)}"
+        return f"Type: {payload.get('node_type') or 'node'}"
+    if suggestion_type == ProposalType.TAG.value:
+        return f"Tag: #{payload.get('tag') or ''}"
+    if suggestion_type in {ProposalType.MANUAL_EDGE.value, ProposalType.CONTRADICTION.value}:
+        return f"{payload.get('edge_type') or 'edge'} link"
+    if suggestion_type == ProposalType.SIMILAR_NODE.value:
+        return "Similar node"
+    if suggestion_type == ProposalType.DUPLICATE.value:
+        return "Possible duplicate"
+    return suggestion_type
+
+
+def _suggestion_review_description(repository: GraphRepository, proposal: AgentProposal) -> str:
+    payload = proposal.payload
+    labels = []
+    for node_id in proposal.node_ids[:2]:
+        node = repository.get_node(node_id)
+        if node:
+            labels.append(_node_label(node))
+    details = str(
+        payload.get("reason")
+        or payload.get("source")
+        or payload.get("current_node_type")
+        or payload.get("similar_title")
+        or payload.get("duplicate_title")
+        or ""
+    ).strip()
+    parts = [part for part in [" -> ".join(labels), details] if part]
+    return " | ".join(parts) or "Review this suggestion before it changes the graph."
+
+
+def _review_item_from_suggestion(repository: GraphRepository, proposal: AgentProposal) -> ReviewItemResponse:
+    status = "deferred" if proposal.review_status == ReviewStatus.PENDING and _is_deferred_suggestion(proposal) else proposal.review_status.value
+    return ReviewItemResponse(
+        id=proposal.id,
+        item_type="suggestion",
+        review_kind=_suggestion_type(proposal),
+        title=_suggestion_review_title(proposal),
+        description=_suggestion_review_description(repository, proposal),
+        node_ids=proposal.node_ids,
+        edge_ids=proposal.edge_ids,
+        payload=proposal.payload,
+        score=proposal.score,
+        origin=proposal.origin.value,
+        status=status,
+        feedback=None,
+        open_graph_url=_open_graph_url(proposal.node_ids),
+        created_at=proposal.created_at.isoformat(),
+    )
+
+
+def _review_item_from_inbox_item(item: InboxItem) -> ReviewItemResponse:
+    insight = item.insight
+    status = item.feedback.action.value if item.feedback else "pending"
+    return ReviewItemResponse(
+        id=insight.id,
+        item_type="insight",
+        review_kind=insight.insight_type.value,
+        title=insight.title,
+        description=insight.description,
+        node_ids=insight.node_ids,
+        edge_ids=insight.edge_ids,
+        payload=insight.metadata,
+        score=insight.score,
+        origin="agent",
+        status=status,
+        feedback=_feedback_response(item.feedback) if item.feedback else None,
+        open_graph_url=_open_graph_url(insight.node_ids),
+        created_at=insight.created_at.isoformat(),
     )
 
 
@@ -974,6 +1088,73 @@ def _record_suggestion_feedback(
     return effects
 
 
+def _accept_suggestion_by_id(
+    repository: GraphRepository,
+    suggestion_id: str,
+    request: SuggestionDecisionRequest,
+) -> tuple[AgentProposal, list[str]]:
+    proposal = repository.get_proposal(suggestion_id)
+    if not proposal:
+        raise HTTPException(status_code=404, detail="Suggestion not found")
+    if proposal.review_status != ReviewStatus.PENDING:
+        raise HTTPException(status_code=400, detail="Suggestion is already reviewed")
+    try:
+        effects = _accept_suggestion(repository, proposal, request.payload)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    _record_suggestion_feedback(repository, proposal, "accept", note=request.note)
+    if request.note:
+        proposal.payload["user_comment"] = request.note.strip()
+        repository.update_proposal(proposal)
+    if repository.storage_path:
+        repository.save()
+    return proposal, effects
+
+
+def _reject_suggestion_by_id(
+    repository: GraphRepository,
+    suggestion_id: str,
+    request: SuggestionDecisionRequest,
+) -> tuple[AgentProposal, list[str]]:
+    proposal = repository.get_proposal(suggestion_id)
+    if not proposal:
+        raise HTTPException(status_code=404, detail="Suggestion not found")
+    if proposal.review_status != ReviewStatus.PENDING:
+        raise HTTPException(status_code=400, detail="Suggestion is already reviewed")
+    if request.note:
+        proposal.payload["rejection_note"] = request.note.strip()
+    if request.payload:
+        proposal.payload["rejection_feedback"] = request.payload
+    proposal.review_status = ReviewStatus.REJECTED
+    effects = _record_suggestion_feedback(repository, proposal, "reject", note=request.note)
+    repository.update_proposal(proposal)
+    if repository.storage_path:
+        repository.save()
+    return proposal, [f"suggestion_rejected:{proposal.id}", *effects]
+
+
+def _defer_suggestion_by_id(
+    repository: GraphRepository,
+    suggestion_id: str,
+    request: SuggestionDecisionRequest,
+) -> tuple[AgentProposal, list[str]]:
+    proposal = repository.get_proposal(suggestion_id)
+    if not proposal:
+        raise HTTPException(status_code=404, detail="Suggestion not found")
+    if proposal.review_status != ReviewStatus.PENDING:
+        raise HTTPException(status_code=400, detail="Suggestion is already reviewed")
+    proposal.payload["review_deferred"] = True
+    proposal.payload["review_deferred_at"] = utc_now().isoformat()
+    if request.note:
+        proposal.payload["defer_note"] = request.note.strip()
+    if request.payload:
+        proposal.payload["defer_feedback"] = request.payload
+    repository.update_proposal(proposal)
+    if repository.storage_path:
+        repository.save()
+    return proposal, [f"suggestion_deferred:{proposal.id}"]
+
+
 def _clean_tags(tags: Optional[List[str]]) -> List[str]:
     """Normalize user-entered tags while preserving their order."""
     cleaned: List[str] = []
@@ -1386,25 +1567,46 @@ async def get_suggestions(review_status: Optional[str] = None, limit: int = 100)
     )
 
 
+@app.get("/api/review", response_model=ReviewListResponse)
+async def get_review_queue(
+    include_reacted: bool = False,
+    include_deferred: bool = False,
+    limit: int = 100,
+):
+    """Получить единую очередь review items из suggestions и agent insights."""
+    repository = get_repository()
+    review_items: List[ReviewItemResponse] = []
+
+    for suggestion in repository.get_all_proposals():
+        is_deferred = _is_deferred_suggestion(suggestion)
+        is_pending = suggestion.review_status == ReviewStatus.PENDING
+        if not include_reacted and not is_pending:
+            continue
+        if is_deferred and not include_deferred:
+            continue
+        review_items.append(_review_item_from_suggestion(repository, suggestion))
+
+    inbox_items = get_personalization_service().list_inbox(
+        include_reacted=True,
+        limit=max(limit, 100),
+    )
+    for item in inbox_items:
+        is_deferred = item.feedback is not None and item.feedback.action.value == "defer"
+        if item.feedback and not include_reacted:
+            continue
+        if is_deferred and not include_deferred:
+            continue
+        review_items.append(_review_item_from_inbox_item(item))
+
+    review_items.sort(key=lambda item: item.created_at, reverse=True)
+    return ReviewListResponse(items=review_items[:limit], total=min(len(review_items), limit))
+
+
 @app.post("/api/suggestions/{suggestion_id}/accept", response_model=SuggestionResponse)
 async def accept_suggestion(suggestion_id: str, request: SuggestionDecisionRequest):
     """Принять предложение и применить его эффект к ручному графу, если он есть."""
     repository = get_repository()
-    proposal = repository.get_proposal(suggestion_id)
-    if not proposal:
-        raise HTTPException(status_code=404, detail="Suggestion not found")
-    if proposal.review_status != ReviewStatus.PENDING:
-        raise HTTPException(status_code=400, detail="Suggestion is already reviewed")
-    try:
-        effects = _accept_suggestion(repository, proposal, request.payload)
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc))
-    _record_suggestion_feedback(repository, proposal, "accept", note=request.note)
-    if request.note:
-        proposal.payload["user_comment"] = request.note.strip()
-        repository.update_proposal(proposal)
-    if repository.storage_path:
-        repository.save()
+    proposal, effects = _accept_suggestion_by_id(repository, suggestion_id, request)
     return _suggestion_response(proposal, effects=effects)
 
 
@@ -1412,21 +1614,40 @@ async def accept_suggestion(suggestion_id: str, request: SuggestionDecisionReque
 async def reject_suggestion(suggestion_id: str, request: SuggestionDecisionRequest):
     """Отклонить предложение и сохранить feedback в payload."""
     repository = get_repository()
-    proposal = repository.get_proposal(suggestion_id)
-    if not proposal:
-        raise HTTPException(status_code=404, detail="Suggestion not found")
-    if proposal.review_status != ReviewStatus.PENDING:
-        raise HTTPException(status_code=400, detail="Suggestion is already reviewed")
-    if request.note:
-        proposal.payload["rejection_note"] = request.note.strip()
-    if request.payload:
-        proposal.payload["rejection_feedback"] = request.payload
-    proposal.review_status = ReviewStatus.REJECTED
-    effects = _record_suggestion_feedback(repository, proposal, "reject", note=request.note)
-    repository.update_proposal(proposal)
-    if repository.storage_path:
-        repository.save()
-    return _suggestion_response(proposal, effects=[f"suggestion_rejected:{proposal.id}", *effects])
+    proposal, effects = _reject_suggestion_by_id(repository, suggestion_id, request)
+    return _suggestion_response(proposal, effects=effects)
+
+
+@app.post("/api/suggestions/{suggestion_id}/defer", response_model=SuggestionResponse)
+async def defer_suggestion(suggestion_id: str, request: SuggestionDecisionRequest):
+    """Отложить предложение без применения и без окончательного reject."""
+    repository = get_repository()
+    proposal, effects = _defer_suggestion_by_id(repository, suggestion_id, request)
+    return _suggestion_response(proposal, effects=effects)
+
+
+@app.post("/api/review/suggestions/{suggestion_id}/accept", response_model=SuggestionResponse)
+async def review_accept_suggestion(suggestion_id: str, request: SuggestionDecisionRequest):
+    """Review alias для edit-and-accept suggestion."""
+    repository = get_repository()
+    proposal, effects = _accept_suggestion_by_id(repository, suggestion_id, request)
+    return _suggestion_response(proposal, effects=effects)
+
+
+@app.post("/api/review/suggestions/{suggestion_id}/reject", response_model=SuggestionResponse)
+async def review_reject_suggestion(suggestion_id: str, request: SuggestionDecisionRequest):
+    """Review alias для reject suggestion."""
+    repository = get_repository()
+    proposal, effects = _reject_suggestion_by_id(repository, suggestion_id, request)
+    return _suggestion_response(proposal, effects=effects)
+
+
+@app.post("/api/review/suggestions/{suggestion_id}/defer", response_model=SuggestionResponse)
+async def review_defer_suggestion(suggestion_id: str, request: SuggestionDecisionRequest):
+    """Review alias для defer suggestion."""
+    repository = get_repository()
+    proposal, effects = _defer_suggestion_by_id(repository, suggestion_id, request)
+    return _suggestion_response(proposal, effects=effects)
 
 
 @app.post("/api/edges", response_model=EdgeResponse)
@@ -1566,44 +1787,37 @@ async def get_node(node_id: str):
 @app.get("/api/edges", response_model=EdgeListResponse)
 async def get_edges(
     edge_type: Optional[str] = None,
+    edge_layer: Optional[str] = None,
     limit: int = 100
 ):
     """
     Получить список связей.
     
-    Поддерживает фильтрацию по типу связи.
+    Поддерживает фильтрацию по типу связи и слою.
     """
     repository = get_repository()
-    
+
+    edge_type_enum = None
     if edge_type:
         try:
             edge_type_enum = EdgeType(edge_type)
         except ValueError:
             raise HTTPException(status_code=400, detail=f"Invalid edge_type: {edge_type}")
-        edges = [
-            edge for edge in repository.get_all_edges()
-            if edge.edge_type == edge_type_enum
-        ][:limit]
-    else:
-        edges = repository.get_all_edges()[:limit]
+
+    edge_layer_enum = None
+    if edge_layer:
+        try:
+            edge_layer_enum = EdgeLayer(edge_layer)
+        except ValueError:
+            raise HTTPException(status_code=400, detail=f"Invalid edge_layer: {edge_layer}")
+
+    edges = repository.get_all_edges(edge_layer=edge_layer_enum)
+    if edge_type_enum:
+        edges = [edge for edge in edges if edge.edge_type == edge_type_enum]
+    edges = edges[:limit]
     
     return EdgeListResponse(
-        edges=[
-            EdgeResponse(
-                id=e.id,
-                source_id=e.source_id,
-                target_id=e.target_id,
-                edge_type=e.edge_type.value,
-                edge_layer=e.edge_layer.value,
-                weight=e.weight,
-                metadata=e.metadata,
-                trust_status=e.trust_status.value,
-                origin=e.origin.value,
-                review_status=e.review_status.value,
-                user_comment=e.user_comment,
-            )
-            for e in edges
-        ],
+        edges=[_edge_response(e) for e in edges],
         total=len(edges)
     )
 
@@ -1701,6 +1915,22 @@ async def react_to_insight(insight_id: str, request: InsightFeedbackRequest):
         status_code = 404 if message.startswith("Insight not found") else 400
         raise HTTPException(status_code=status_code, detail=message)
     return _feedback_response(feedback)
+
+
+@app.post("/api/review/insights/{insight_id}/react", response_model=InsightFeedbackResponse)
+async def review_react_to_insight(insight_id: str, request: InsightFeedbackRequest):
+    """Review alias для реакции на agent insight."""
+    return await react_to_insight(insight_id, request)
+
+
+@app.post("/api/review/insights/{insight_id}/defer", response_model=InsightFeedbackResponse)
+async def review_defer_insight(insight_id: str, request: SuggestionDecisionRequest):
+    """Отложить agent insight без изменения смыслового графа."""
+    defer_request = InsightFeedbackRequest(
+        action="defer",
+        note=request.note,
+    )
+    return await react_to_insight(insight_id, defer_request)
 
 
 @app.get("/api/personalization", response_model=InterestProfileResponse)
