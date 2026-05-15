@@ -63,13 +63,15 @@
 
     button,
     input,
+    select,
     textarea {
       font: inherit;
     }
 
+    input,
+    select,
     textarea {
       width: 100%;
-      min-height: 120px;
       resize: vertical;
       border: 1px solid var(--line);
       border-radius: 8px;
@@ -79,6 +81,19 @@
       padding: 10px 12px;
     }
 
+    input,
+    select {
+      min-height: 36px;
+      padding: 0 10px;
+      resize: none;
+    }
+
+    textarea {
+      min-height: 120px;
+    }
+
+    input:focus,
+    select:focus,
     textarea:focus {
       border-color: var(--accent);
       outline: none;
@@ -416,6 +431,21 @@
           <label for="thoughtInput">Idea</label>
           <textarea id="thoughtInput" rows="7"></textarea>
         </div>
+        <div class="field">
+          <label for="thoughtNodeType">Thought type</label>
+          <select id="thoughtNodeType">
+            <option value="idea" selected>Idea</option>
+            <option value="fact">Fact</option>
+            <option value="quote">Quote</option>
+            <option value="question">Question</option>
+            <option value="conclusion">Conclusion</option>
+            <option value="source">Source</option>
+          </select>
+        </div>
+        <div class="field">
+          <label for="thoughtTagsInput">Thought tags</label>
+          <input id="thoughtTagsInput" type="text" placeholder="memory, economics">
+        </div>
         <div id="sourceField" class="field source-field">
           <div class="source-actions">
             <label for="sourceInput">Source</label>
@@ -425,6 +455,21 @@
         </div>
         <div class="panel-actions">
           <button id="saveThought" class="primary" type="button">Add Idea</button>
+        </div>
+        <div class="field">
+          <label for="selectionNodeType">Selection type</label>
+          <select id="selectionNodeType">
+            <option value="quote" selected>Quote</option>
+            <option value="idea">Idea</option>
+            <option value="fact">Fact</option>
+            <option value="question">Question</option>
+            <option value="conclusion">Conclusion</option>
+            <option value="source">Source</option>
+          </select>
+        </div>
+        <div class="field">
+          <label for="selectionTagsInput">Selection tags</label>
+          <input id="selectionTagsInput" type="text" placeholder="source, quote">
         </div>
       </aside>
     </div>
@@ -459,10 +504,14 @@
     const menuAddSource = document.querySelector("#menuAddSource");
     const themeToggle = document.querySelector("#themeToggle");
     const thoughtInput = document.querySelector("#thoughtInput");
+    const thoughtNodeType = document.querySelector("#thoughtNodeType");
+    const thoughtTagsInput = document.querySelector("#thoughtTagsInput");
     const sourceInput = document.querySelector("#sourceInput");
     const sourceField = document.querySelector("#sourceField");
     const toggleSource = document.querySelector("#toggleSource");
     const saveThought = document.querySelector("#saveThought");
+    const selectionNodeType = document.querySelector("#selectionNodeType");
+    const selectionTagsInput = document.querySelector("#selectionTagsInput");
 
     function applyTheme(theme) {
       const normalizedTheme = theme === "dark" ? "dark" : "light";
@@ -493,6 +542,20 @@
     function setStatus(text, isError = false) {
       status.textContent = text || "";
       status.classList.toggle("error", Boolean(isError));
+    }
+
+    function parseTags(value) {
+      const seen = new Set();
+      return String(value || "")
+        .split(",")
+        .map((tag) => tag.trim())
+        .filter((tag) => {
+          if (!tag || seen.has(tag)) {
+            return false;
+          }
+          seen.add(tag);
+          return true;
+        });
     }
 
     function hideMenu() {
@@ -581,6 +644,8 @@
       try {
         const payload = {
           text: selection.text,
+          node_type: selectionNodeType.value || "quote",
+          tags: parseTags(selectionTagsInput.value),
           source_type: "reader",
           source_url: state.sourceUrl,
           document_title: state.documentTitle,
@@ -595,7 +660,7 @@
           method: "POST",
           body: JSON.stringify(payload),
         });
-        setStatus(`Added quote ${result.node_id.slice(0, 8)}... to graph.`);
+        setStatus(`Added ${result.node_type} ${result.node_id.slice(0, 8)}... to graph.`);
       } catch (error) {
         setStatus(error.message, true);
       } finally {
@@ -652,7 +717,8 @@
         const payload = {
           text: thought,
           source_text: sourceText || null,
-          node_type: "idea",
+          node_type: thoughtNodeType.value || "idea",
+          tags: parseTags(thoughtTagsInput.value),
           source_type: "reader",
           source_url: state.sourceUrl,
           document_title: state.documentTitle,
@@ -667,9 +733,11 @@
           body: JSON.stringify(payload),
         });
         thoughtInput.value = "";
+        thoughtTagsInput.value = "";
         sourceInput.value = "";
+        thoughtNodeType.value = "idea";
         state.sourceSelection = null;
-        setStatus(`Added thought ${result.node_id.slice(0, 8)}... to graph.`);
+        setStatus(`Added ${result.node_type} ${result.node_id.slice(0, 8)}... to graph.`);
       } catch (error) {
         setStatus(error.message, true);
       } finally {
@@ -696,7 +764,11 @@
         };
         state.sourceSelection = null;
         thoughtInput.value = "";
+        thoughtTagsInput.value = "";
+        thoughtNodeType.value = "idea";
         sourceInput.value = "";
+        selectionTagsInput.value = "";
+        selectionNodeType.value = "quote";
         sourceField.classList.remove("collapsed");
         toggleSource.textContent = "Hide";
         docTitle.textContent = file.name;
@@ -767,7 +839,11 @@
       state.lastSelection = null;
       state.sourceSelection = null;
       thoughtInput.value = "";
+      thoughtTagsInput.value = "";
+      thoughtNodeType.value = "idea";
       sourceInput.value = "";
+      selectionTagsInput.value = "";
+      selectionNodeType.value = "quote";
       sourceField.classList.remove("collapsed");
       toggleSource.textContent = "Hide";
       fileInput.value = "";

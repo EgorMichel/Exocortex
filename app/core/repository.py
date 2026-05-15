@@ -131,6 +131,25 @@ class GraphRepository:
             key=edge.id,
             **edge.to_dict()
         )
+
+    def update_edge(self, edge: Edge) -> bool:
+        """
+        Обновить существующую связь.
+
+        Если у связи изменились source_id или target_id, ребро переносится между
+        новыми узлами с сохранением стабильного id.
+        """
+        for source, target, key, _ in self.graph.edges(keys=True, data=True):
+            if key == edge.id:
+                if edge.source_id not in self.graph or edge.target_id not in self.graph:
+                    return False
+                if source != edge.source_id or target != edge.target_id:
+                    self.graph.remove_edge(source, target, key=key)
+                    self.graph.add_edge(edge.source_id, edge.target_id, key=edge.id, **edge.to_dict())
+                else:
+                    self.graph.edges[source, target, key].update(edge.to_dict())
+                return True
+        return False
     
     def get_edge(self, edge_id: str) -> Optional[Edge]:
         """Получить связь по ID."""

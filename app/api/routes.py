@@ -18,7 +18,7 @@ from app.agents.insights import Digest, Insight
 from app.agents.proactive import AgentSettings, ProactiveAgent
 from app.agents.scheduler import build_agent_scheduler
 from app.config import load_settings
-from app.core.models import EdgeType, NodeType
+from app.core.models import Edge, EdgeType, Node, NodeType, Origin, ReviewStatus, TrustStatus
 from app.core.repository import GraphRepository
 from app.llm.extraction import extract_and_store, LLMService
 from app.services.external_sources import ExternalSourceIngestor
@@ -55,6 +55,7 @@ class ManualFragmentRequest(BaseModel):
     text: str = Field(..., description="Выделенный текст", min_length=1)
     source_text: Optional[str] = Field(default=None, description="Исходный текст или цитата")
     node_type: Optional[str] = Field(default=None, description="Тип создаваемого узла")
+    tags: List[str] = Field(default_factory=list, description="Пользовательские теги")
     source_type: str = Field(default="manual_selection", description="Тип источника")
     source_url: Optional[str] = Field(default=None, description="URL или путь источника")
     document_title: Optional[str] = Field(default=None, description="Название документа")
@@ -69,6 +70,60 @@ class ManualFragmentResponse(BaseModel):
     nodes_created: int
     edges_created: int
     summary: str
+
+
+class NodeCreateRequest(BaseModel):
+    """Запрос на ручное создание узла."""
+    content: str = Field(..., min_length=1)
+    node_type: str = Field(...)
+    source_text: Optional[str] = None
+    title: Optional[str] = None
+    tags: List[str] = Field(default_factory=list)
+    user_comment: Optional[str] = None
+    trust_status: Optional[str] = None
+    origin: Optional[str] = None
+    review_status: Optional[str] = None
+    metadata: Dict[str, Any] = Field(default_factory=dict)
+
+
+class NodePatchRequest(BaseModel):
+    """Запрос на ручное редактирование узла."""
+    content: Optional[str] = None
+    node_type: Optional[str] = None
+    source_text: Optional[str] = None
+    title: Optional[str] = None
+    tags: Optional[List[str]] = None
+    user_comment: Optional[str] = None
+    trust_status: Optional[str] = None
+    origin: Optional[str] = None
+    review_status: Optional[str] = None
+    metadata: Optional[Dict[str, Any]] = None
+
+
+class EdgeCreateRequest(BaseModel):
+    """Запрос на ручное создание связи."""
+    source_id: str = Field(..., min_length=1)
+    target_id: str = Field(..., min_length=1)
+    edge_type: str = Field(...)
+    weight: float = Field(default=1.0)
+    user_comment: Optional[str] = None
+    trust_status: Optional[str] = None
+    origin: Optional[str] = None
+    review_status: Optional[str] = None
+    metadata: Dict[str, Any] = Field(default_factory=dict)
+
+
+class EdgePatchRequest(BaseModel):
+    """Запрос на ручное редактирование связи."""
+    source_id: Optional[str] = None
+    target_id: Optional[str] = None
+    edge_type: Optional[str] = None
+    weight: Optional[float] = None
+    user_comment: Optional[str] = None
+    trust_status: Optional[str] = None
+    origin: Optional[str] = None
+    review_status: Optional[str] = None
+    metadata: Optional[Dict[str, Any]] = None
 
 
 class NodeResponse(BaseModel):
@@ -328,6 +383,55 @@ def _inbox_item_response(item: InboxItem) -> InboxItemResponse:
     )
 
 
+def _clean_tags(tags: Optional[List[str]]) -> List[str]:
+    """Normalize user-entered tags while preserving their order."""
+    cleaned: List[str] = []
+    seen = set()
+    for tag in tags or []:
+        value = str(tag).strip()
+        if value and value not in seen:
+            cleaned.append(value)
+            seen.add(value)
+    return cleaned
+
+
+def _request_fields_set(request: BaseModel) -> set[str]:
+    return set(getattr(request, "model_fields_set", None) or getattr(request, "__fields_set__", set()))
+
+
+def _node_response(node: Node) -> NodeResponse:
+    return NodeResponse(
+        id=node.id,
+        node_type=node.node_type.value,
+        content=node.content,
+        source_text=node.source_text,
+        strength=node.strength,
+        created_at=node.created_at.isoformat(),
+        metadata=node.metadata,
+        trust_status=node.trust_status.value,
+        origin=node.origin.value,
+        review_status=node.review_status.value,
+        user_comment=node.user_comment,
+        title=node.title,
+        tags=node.tags,
+    )
+
+
+def _edge_response(edge: Edge) -> EdgeResponse:
+    return EdgeResponse(
+        id=edge.id,
+        source_id=edge.source_id,
+        target_id=edge.target_id,
+        edge_type=edge.edge_type.value,
+        weight=edge.weight,
+        metadata=edge.metadata,
+        trust_status=edge.trust_status.value,
+        origin=edge.origin.value,
+        review_status=edge.review_status.value,
+        user_comment=edge.user_comment,
+    )
+
+
 # === Endpoints ===
 
 @app.get("/")
@@ -445,6 +549,7 @@ async def add_manual_fragment(request: ManualFragmentRequest):
             document_title=request.document_title,
             source_text=request.source_text,
             node_type=node_type,
+            tags=_clean_tags(request.tags),
             metadata=request.metadata,
         )
     except ValueError as exc:
@@ -461,6 +566,174 @@ async def add_manual_fragment(request: ManualFragmentRequest):
         edges_created=0,
         summary=node.content[:200] + "..." if len(node.content) > 200 else node.content,
     )
+
+
+@app.post("/api/nodes", response_model=NodeResponse)
+async def create_node(request: NodeCreateRequest):
+    """Создать пользовательский узел графа вручную."""
+    content = request.content.strip()
+    if not content:
+        raise HTTPException(status_code=400, detail="content cannot be empty")
+
+    try:
+        node_type = NodeType(request.node_type)
+    except ValueError:
+        raise HTTPException(status_code=400, detail=f"Invalid node_type: {request.node_type}")
+
+    node = Node(
+        content=content,
+        node_type=node_type,
+        source_text=request.source_text.strip() if request.source_text else None,
+        metadata=dict(request.metadata),
+        trust_status=TrustStatus.CONFIRMED,
+        origin=Origin.USER,
+        review_status=ReviewStatus.ACCEPTED,
+        user_comment=request.user_comment,
+        title=request.title,
+        tags=_clean_tags(request.tags),
+    )
+
+    repository = get_repository()
+    repository.add_node(node)
+    if repository.storage_path:
+        repository.save()
+    return _node_response(node)
+
+
+@app.patch("/api/nodes/{node_id}", response_model=NodeResponse)
+async def update_node(node_id: str, request: NodePatchRequest):
+    """Отредактировать существующий узел графа."""
+    repository = get_repository()
+    node = repository.get_node(node_id)
+    if not node:
+        raise HTTPException(status_code=404, detail="Node not found")
+
+    fields_set = _request_fields_set(request)
+
+    if "content" in fields_set:
+        content = (request.content or "").strip()
+        if not content:
+            raise HTTPException(status_code=400, detail="content cannot be empty")
+        node.content = content
+    if request.node_type is not None:
+        try:
+            node.node_type = NodeType(request.node_type)
+        except ValueError:
+            raise HTTPException(status_code=400, detail=f"Invalid node_type: {request.node_type}")
+    if "source_text" in fields_set:
+        node.source_text = request.source_text.strip() if request.source_text else None
+    if "title" in fields_set:
+        node.title = request.title.strip() if request.title else None
+    if "tags" in fields_set:
+        node.tags = _clean_tags(request.tags)
+    if "user_comment" in fields_set:
+        node.user_comment = request.user_comment.strip() if request.user_comment else None
+    if request.trust_status is not None:
+        try:
+            node.trust_status = TrustStatus(request.trust_status)
+        except ValueError:
+            raise HTTPException(status_code=400, detail=f"Invalid trust_status: {request.trust_status}")
+    if request.origin is not None:
+        try:
+            node.origin = Origin(request.origin)
+        except ValueError:
+            raise HTTPException(status_code=400, detail=f"Invalid origin: {request.origin}")
+    if request.review_status is not None:
+        try:
+            node.review_status = ReviewStatus(request.review_status)
+        except ValueError:
+            raise HTTPException(status_code=400, detail=f"Invalid review_status: {request.review_status}")
+    if request.metadata is not None:
+        node.metadata = dict(request.metadata)
+
+    if not repository.update_node(node):
+        raise HTTPException(status_code=404, detail="Node not found")
+    if repository.storage_path:
+        repository.save()
+    return _node_response(node)
+
+
+@app.post("/api/edges", response_model=EdgeResponse)
+async def create_edge(request: EdgeCreateRequest):
+    """Создать пользовательскую смысловую связь вручную."""
+    repository = get_repository()
+    if not repository.get_node(request.source_id):
+        raise HTTPException(status_code=404, detail="Source node not found")
+    if not repository.get_node(request.target_id):
+        raise HTTPException(status_code=404, detail="Target node not found")
+
+    try:
+        edge_type = EdgeType(request.edge_type)
+    except ValueError:
+        raise HTTPException(status_code=400, detail=f"Invalid edge_type: {request.edge_type}")
+
+    edge = Edge(
+        source_id=request.source_id,
+        target_id=request.target_id,
+        edge_type=edge_type,
+        weight=request.weight,
+        metadata=dict(request.metadata),
+        trust_status=TrustStatus.CONFIRMED,
+        origin=Origin.USER,
+        review_status=ReviewStatus.ACCEPTED,
+        user_comment=request.user_comment,
+    )
+    repository.add_edge(edge)
+    if repository.storage_path:
+        repository.save()
+    return _edge_response(edge)
+
+
+@app.patch("/api/edges/{edge_id}", response_model=EdgeResponse)
+async def update_edge(edge_id: str, request: EdgePatchRequest):
+    """Отредактировать существующую связь графа."""
+    repository = get_repository()
+    edge = repository.get_edge(edge_id)
+    if not edge:
+        raise HTTPException(status_code=404, detail="Edge not found")
+
+    fields_set = _request_fields_set(request)
+
+    if request.source_id is not None:
+        if not repository.get_node(request.source_id):
+            raise HTTPException(status_code=404, detail="Source node not found")
+        edge.source_id = request.source_id
+    if request.target_id is not None:
+        if not repository.get_node(request.target_id):
+            raise HTTPException(status_code=404, detail="Target node not found")
+        edge.target_id = request.target_id
+    if request.edge_type is not None:
+        try:
+            edge.edge_type = EdgeType(request.edge_type)
+        except ValueError:
+            raise HTTPException(status_code=400, detail=f"Invalid edge_type: {request.edge_type}")
+    if request.weight is not None:
+        edge.weight = request.weight
+    if "user_comment" in fields_set:
+        edge.user_comment = request.user_comment.strip() if request.user_comment else None
+    if request.trust_status is not None:
+        try:
+            edge.trust_status = TrustStatus(request.trust_status)
+        except ValueError:
+            raise HTTPException(status_code=400, detail=f"Invalid trust_status: {request.trust_status}")
+    if request.origin is not None:
+        try:
+            edge.origin = Origin(request.origin)
+        except ValueError:
+            raise HTTPException(status_code=400, detail=f"Invalid origin: {request.origin}")
+    if request.review_status is not None:
+        try:
+            edge.review_status = ReviewStatus(request.review_status)
+        except ValueError:
+            raise HTTPException(status_code=400, detail=f"Invalid review_status: {request.review_status}")
+    if request.metadata is not None:
+        edge.metadata = dict(request.metadata)
+
+    if not repository.update_edge(edge):
+        raise HTTPException(status_code=404, detail="Edge not found")
+    if repository.storage_path:
+        repository.save()
+    return _edge_response(edge)
 
 
 @app.get("/api/nodes", response_model=NodeListResponse)

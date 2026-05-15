@@ -5,6 +5,13 @@
 ## [Unreleased]
 
 ### Добавлено
+- **MVP 2 Этап 3: ручное создание узлов и связей**:
+  - Пользовательские endpoints `POST /api/nodes`, `PATCH /api/nodes/{node_id}`, `POST /api/edges`, `PATCH /api/edges/{edge_id}`
+  - Создание ручных узлов и связей в `/graph`
+  - Редактирование выбранного узла в боковой панели `/graph`
+  - Выбор двух узлов source/target и создание ручной связи `used_in`, `derived_from` или `contradicts`
+  - Выбор MVP 2-типа и ввод тегов в `/reader`; теги сохраняются в стандартное поле `tags`
+  - Ручные узлы и связи при создании получают `origin=user`, `trust_status=confirmed`, `review_status=accepted`
 - **Запуск приложения**:
   - Точка входа `python -m app.main` для FastAPI-сервера
   - CLI `python -m app.cli` с командами `add`, `stats`, `list`, `search`, `forgotten`, `clear`
@@ -36,7 +43,8 @@
   - Поддержка только MVP 2-типов узлов и ручных связей
 - **API слой** (`app/api/routes.py`):
   - REST эндпоинты для управления графом знаний
-  - Эндпоинты: GET /api/nodes, POST /api/knowledge, GET /api/stats, GET /api/fragments
+  - Эндпоинты чтения: GET /api/nodes, GET /api/edges, POST /api/knowledge, GET /api/stats, GET /api/fragments
+  - Ручные CRUD endpoints: POST /api/nodes, PATCH /api/nodes/{node_id}, POST /api/edges, PATCH /api/edges/{edge_id}
 - **Агент** (`app/agents/`):
   - Заготовка для проактивного агента
   - Модели `Insight`, `InsightType`, `Digest` и JSON-хранилище дайджестов
@@ -60,8 +68,10 @@
   - Сохранение ручной мысли как `idea`: `content` хранит мысль, `source_text` хранит источник, `KnowledgeFragment.content` сохраняет источник как provenance
   - Сохранение выделенного текста в граф без LLM-обработки и без автоматического извлечения связей
   - API endpoint `POST /api/manual-fragments` принимает `source_text` и `node_type`
+  - API endpoint `POST /api/manual-fragments` сохраняет пользовательские теги в стандартное поле `tags`
   - CLI-команда `add-manual` получила опцию `--source-text`
   - Встроенная web-читалка `/reader` для локальных UTF-8 текстовых и Markdown-файлов
+  - `/reader` позволяет выбрать MVP 2-тип узла для выделения или мысли и добавить пользовательские теги
   - Контекстное меню читалки: выделить текст, нажать правой кнопкой мыши, выбрать `Add to Graph`
   - Правая панель читалки для записи мысли, редактирования источника, скрытия источника и сохранения через `Add Thought`
   - Контекстное меню читалки получило действие `Add as Source`, которое переносит выделенный абзац в поле источника
@@ -86,13 +96,14 @@
   - Тесты генерации напоминаний, скрытых связей, противоречий, векторного поиска, импорта источников и сохранения дайджестов
   - Тесты оптимизированного анализа: переиспользование candidate pairs, ранний skip без LLM-клиента, батчинг противоречий и пропуск неизменившихся пар
   - Тесты ручных мыслей с `source_text`, reader UI и повторного анализа при изменении источника
-  - Текущий набор: 90 автоматических тестов
+  - Тесты ручного создания/редактирования узлов и связей, reader tags/defaults и отказа от legacy-типов
+  - Текущий набор: 94 автоматических теста
 
 ### Изменено
 - **Breaking change / MVP 2 data model**: Продуктовая модель переведена на чистый набор типов узлов `idea`, `fact`, `quote`, `question`, `conclusion`, `source` и ручных связей `used_in`, `derived_from`, `contradicts`; legacy-типы и alias не поддерживаются.
 - **Storage reset**: Для старых графов с legacy-типами рекомендуется очистить storage командой `python -m app.cli clear` перед запуском новой версии.
 - **Manual capture defaults**: Выделенный фрагмент теперь создаёт `quote`, пользовательская мысль с `source_text` создаёт `idea`.
-- **Graph UI**: Списки фильтров и визуальные классы обновлены под MVP 2-типы узлов и связей.
+- **Graph UI**: Списки фильтров и визуальные классы обновлены под MVP 2-типы узлов и связей; интерфейс позволяет создавать узлы, редактировать выбранный узел и создавать ручную связь между двумя выбранными узлами.
 - **LLM extraction**: Prompt/schema запрещают `related_to`, `supports`, `example_of`, `part_of`, `similar_to` и не превращают семантическую похожесть в ручную связь.
 - **API responses**: Узлы и связи возвращают стандартизированные поля `trust_status`, `origin`, `review_status`, `user_comment`; узлы также возвращают `title` и `tags`.
 - **Proactive analysis**: Поиск похожих пар, embeddings, fingerprints и LLM-проверка противоречий учитывают `source_text` вместе с `content`

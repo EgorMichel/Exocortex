@@ -16,6 +16,7 @@ def store_manual_fragment(
     document_title: Optional[str] = None,
     source_text: Optional[str] = None,
     node_type: NodeType = NodeType.QUOTE,
+    tags: Optional[list[str]] = None,
     metadata: Optional[dict[str, Any]] = None,
 ) -> tuple[KnowledgeFragment, Node]:
     """Store a user-selected text fragment as a single graph node."""
@@ -40,6 +41,14 @@ def store_manual_fragment(
         node_metadata["document_title"] = document_title
     if metadata:
         node_metadata.update(metadata)
+    cleaned_tags = []
+    seen_tags = set()
+    for tag in tags or node_metadata.get("tags", []):
+        value = str(tag).strip()
+        if value and value not in seen_tags:
+            cleaned_tags.append(value)
+            seen_tags.add(value)
+    node_metadata["tags"] = cleaned_tags
 
     node = Node(
         content=content,
@@ -51,7 +60,7 @@ def store_manual_fragment(
         review_status=ReviewStatus.ACCEPTED,
         user_comment=node_metadata.get("user_comment"),
         title=node_metadata.get("title") or document_title,
-        tags=node_metadata.get("tags", []),
+        tags=cleaned_tags,
     )
 
     repository.add_node(node)

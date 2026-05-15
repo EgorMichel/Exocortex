@@ -473,13 +473,51 @@
     }
 
     .source-box,
-    .edge-box {
+    .edge-box,
+    .form-box {
       display: grid;
       gap: 8px;
       border: 1px solid var(--line);
       border-radius: 8px;
       background: var(--surface);
       padding: 10px;
+    }
+
+    .form-grid {
+      display: grid;
+      gap: 8px;
+    }
+
+    .form-grid textarea {
+      min-height: 86px;
+      resize: vertical;
+    }
+
+    .form-grid input,
+    .form-grid select,
+    .form-grid textarea {
+      width: 100%;
+      min-width: 0;
+    }
+
+    .form-grid label {
+      display: grid;
+      gap: 5px;
+      color: var(--muted);
+      font-size: 12px;
+      font-weight: 700;
+    }
+
+    .endpoint {
+      display: grid;
+      grid-template-columns: 1fr auto;
+      align-items: center;
+      gap: 8px;
+      min-height: 36px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: var(--surface);
+      padding: 7px 9px;
     }
 
     .edge-list {
@@ -695,6 +733,63 @@
       </section>
 
       <section class="section">
+        <span class="label">Create node</span>
+        <div class="form-box form-grid">
+          <label>
+            Title
+            <input id="newNodeTitle" type="text" autocomplete="off">
+          </label>
+          <label>
+            Type
+            <select id="newNodeType"></select>
+          </label>
+          <label>
+            Content
+            <textarea id="newNodeContent" rows="4"></textarea>
+          </label>
+          <label>
+            Tags
+            <input id="newNodeTags" type="text" placeholder="memory, systems">
+          </label>
+          <label>
+            Comment
+            <textarea id="newNodeComment" rows="2"></textarea>
+          </label>
+          <button id="createNodeButton" class="primary" type="button">Create Node</button>
+        </div>
+      </section>
+
+      <section class="section">
+        <span class="label">Create edge</span>
+        <div class="form-box form-grid">
+          <div class="endpoint">
+            <span id="edgeSourceLabel" class="muted">Source: none</span>
+            <button id="setEdgeSource" type="button">Use Selected</button>
+          </div>
+          <div class="endpoint">
+            <span id="edgeTargetLabel" class="muted">Target: none</span>
+            <button id="setEdgeTarget" type="button">Use Selected</button>
+          </div>
+          <label>
+            Type
+            <select id="newEdgeType"></select>
+          </label>
+          <label>
+            Weight
+            <input id="newEdgeWeight" type="number" min="0" max="10" step="0.1" value="1">
+          </label>
+          <label>
+            Comment
+            <textarea id="newEdgeComment" rows="2"></textarea>
+          </label>
+          <div class="row">
+            <button id="createEdgeButton" class="primary" type="button">Create Edge</button>
+            <button id="clearEdgeDraft" type="button">Clear</button>
+          </div>
+        </div>
+      </section>
+
+      <section class="section">
         <span class="label">Matches</span>
         <div id="resultList" class="result-list"></div>
       </section>
@@ -752,6 +847,33 @@
       </section>
 
       <section class="section">
+        <span class="label">Edit node</span>
+        <div class="form-box form-grid">
+          <label>
+            Title
+            <input id="editNodeTitle" type="text" autocomplete="off" disabled>
+          </label>
+          <label>
+            Type
+            <select id="editNodeType" disabled></select>
+          </label>
+          <label>
+            Content
+            <textarea id="editNodeContent" rows="5" disabled></textarea>
+          </label>
+          <label>
+            Tags
+            <input id="editNodeTags" type="text" disabled>
+          </label>
+          <label>
+            Comment
+            <textarea id="editNodeComment" rows="2" disabled></textarea>
+          </label>
+          <button id="saveNodeButton" class="primary" type="button" disabled>Save Node</button>
+        </div>
+      </section>
+
+      <section class="section">
         <span class="label">Memory strength</span>
         <div class="strength"><span id="strengthBar"></span></div>
         <p id="strengthText" class="muted">No node selected.</p>
@@ -796,6 +918,10 @@
       activeTypes: new Set(NODE_TYPES),
       activeEdges: new Set(Object.keys(EDGE_LABELS)),
       selectedId: null,
+      edgeDraft: {
+        sourceId: null,
+        targetId: null,
+      },
       search: "",
       width: 900,
       height: 640,
@@ -819,6 +945,9 @@
     const resultList = document.querySelector("#resultList");
     const searchInput = document.querySelector("#searchInput");
     const themeToggle = document.querySelector("#themeToggle");
+    const newNodeType = document.querySelector("#newNodeType");
+    const newEdgeType = document.querySelector("#newEdgeType");
+    const editNodeType = document.querySelector("#editNodeType");
 
     function escapeHtml(value) {
       return String(value ?? "")
@@ -836,6 +965,40 @@
     function shorten(value, limit = 44) {
       const text = String(value || "").replace(/\s+/g, " ").trim();
       return text.length <= limit ? text : `${text.slice(0, limit - 3)}...`;
+    }
+
+    function parseTags(value) {
+      const seen = new Set();
+      return String(value || "")
+        .split(",")
+        .map((tag) => tag.trim())
+        .filter((tag) => {
+          if (!tag || seen.has(tag)) {
+            return false;
+          }
+          seen.add(tag);
+          return true;
+        });
+    }
+
+    function nodeLabel(nodeId) {
+      const node = state.nodes.find((item) => item.id === nodeId);
+      return node ? `${shorten(node.title || node.content, 28)} (${compactId(node.id)})` : "none";
+    }
+
+    function populateTypeSelects() {
+      const nodeOptions = NODE_TYPES.map((type) => (
+        `<option value="${escapeHtml(type)}">${escapeHtml(TYPE_LABELS[type])}</option>`
+      )).join("");
+      newNodeType.innerHTML = nodeOptions;
+      editNodeType.innerHTML = nodeOptions;
+      newNodeType.value = "idea";
+      editNodeType.value = "idea";
+
+      newEdgeType.innerHTML = Object.keys(EDGE_LABELS).map((type) => (
+        `<option value="${escapeHtml(type)}">${escapeHtml(EDGE_LABELS[type])}</option>`
+      )).join("");
+      newEdgeType.value = "derived_from";
     }
 
     function applyTheme(theme) {
@@ -864,8 +1027,8 @@
       }
     }
 
-    async function requestJson(url) {
-      const response = await fetch(url, { headers: { "Content-Type": "application/json" } });
+    async function requestJson(url, options = {}) {
+      const response = await fetch(url, { headers: { "Content-Type": "application/json" }, ...options });
       if (!response.ok) {
         let detail = `${response.status} ${response.statusText}`;
         try {
@@ -1072,6 +1235,7 @@
       }).join("");
 
       renderResults(visibleNodes);
+      renderEdgeDraft();
       renderInspector();
     }
 
@@ -1087,6 +1251,11 @@
         : '<p class="muted">No visible nodes match the current filters.</p>';
     }
 
+    function renderEdgeDraft() {
+      document.querySelector("#edgeSourceLabel").textContent = `Source: ${nodeLabel(state.edgeDraft.sourceId)}`;
+      document.querySelector("#edgeTargetLabel").textContent = `Target: ${nodeLabel(state.edgeDraft.targetId)}`;
+    }
+
     function renderInspector() {
       const node = state.nodes.find((item) => item.id === state.selectedId);
       const title = document.querySelector("#selectedTitle");
@@ -1098,6 +1267,12 @@
       const sourceTitle = document.querySelector("#sourceTitle");
       const sourceText = document.querySelector("#sourceText");
       const edgeList = document.querySelector("#edgeList");
+      const editTitle = document.querySelector("#editNodeTitle");
+      const editType = document.querySelector("#editNodeType");
+      const editContent = document.querySelector("#editNodeContent");
+      const editTags = document.querySelector("#editNodeTags");
+      const editComment = document.querySelector("#editNodeComment");
+      const saveNodeButton = document.querySelector("#saveNodeButton");
 
       if (!node) {
         title.textContent = "Select a node";
@@ -1109,6 +1284,14 @@
         sourceTitle.textContent = "No source";
         sourceText.textContent = "Source text will appear here when the selected node has provenance attached.";
         edgeList.innerHTML = '<p class="muted">No node selected.</p>';
+        editTitle.value = "";
+        editType.value = "idea";
+        editContent.value = "";
+        editTags.value = "";
+        editComment.value = "";
+        [editTitle, editType, editContent, editTags, editComment, saveNodeButton].forEach((control) => {
+          control.disabled = true;
+        });
         return;
       }
 
@@ -1121,6 +1304,14 @@
       strengthText.textContent = `stored strength ${strength.toFixed(2)} · created ${new Date(node.created_at).toLocaleString()}`;
       sourceTitle.textContent = node.metadata?.document_title || node.metadata?.source_url || node.metadata?.source_type || "Attached source";
       sourceText.textContent = node.source_text || "This node has no source_text. It may still have provenance in metadata.";
+      editTitle.value = node.title || "";
+      editType.value = node.node_type;
+      editContent.value = node.content || "";
+      editTags.value = (node.tags || []).join(", ");
+      editComment.value = node.user_comment || "";
+      [editTitle, editType, editContent, editTags, editComment, saveNodeButton].forEach((control) => {
+        control.disabled = false;
+      });
 
       const nodeById = new Map(state.nodes.map((item) => [item.id, item]));
       const relations = state.edges
@@ -1202,6 +1393,131 @@
         x: (event.clientX - rect.left - state.tx) / state.scale,
         y: (event.clientY - rect.top - state.ty) / state.scale,
       };
+    }
+
+    async function createNodeFromForm() {
+      const content = document.querySelector("#newNodeContent").value.trim();
+      if (!content) {
+        setStatus("Node content is required.", true);
+        return;
+      }
+      const button = document.querySelector("#createNodeButton");
+      button.disabled = true;
+      try {
+        const node = await requestJson("/api/nodes", {
+          method: "POST",
+          body: JSON.stringify({
+            content,
+            node_type: newNodeType.value,
+            title: document.querySelector("#newNodeTitle").value.trim() || null,
+            tags: parseTags(document.querySelector("#newNodeTags").value),
+            user_comment: document.querySelector("#newNodeComment").value.trim() || null,
+            metadata: { entry_mode: "graph_manual" },
+          }),
+        });
+        document.querySelector("#newNodeTitle").value = "";
+        document.querySelector("#newNodeContent").value = "";
+        document.querySelector("#newNodeTags").value = "";
+        document.querySelector("#newNodeComment").value = "";
+        newNodeType.value = "idea";
+        await loadGraph(node.id);
+      } catch (error) {
+        setStatus(error.message, true);
+      } finally {
+        button.disabled = false;
+      }
+    }
+
+    async function saveSelectedNode() {
+      if (!state.selectedId) {
+        setStatus("Select a node before saving.", true);
+        return;
+      }
+      const content = document.querySelector("#editNodeContent").value.trim();
+      if (!content) {
+        setStatus("Node content is required.", true);
+        return;
+      }
+      const button = document.querySelector("#saveNodeButton");
+      button.disabled = true;
+      try {
+        const node = await requestJson(`/api/nodes/${encodeURIComponent(state.selectedId)}`, {
+          method: "PATCH",
+          body: JSON.stringify({
+            content,
+            node_type: editNodeType.value,
+            title: document.querySelector("#editNodeTitle").value.trim() || null,
+            tags: parseTags(document.querySelector("#editNodeTags").value),
+            user_comment: document.querySelector("#editNodeComment").value.trim() || null,
+          }),
+        });
+        const index = state.nodes.findIndex((item) => item.id === node.id);
+        if (index >= 0) {
+          state.nodes[index] = { ...state.nodes[index], ...node };
+        }
+        setStatus(`Saved node ${compactId(node.id)}.`);
+        renderGraph();
+      } catch (error) {
+        setStatus(error.message, true);
+      } finally {
+        button.disabled = false;
+      }
+    }
+
+    function setEdgeEndpoint(kind) {
+      if (!state.selectedId) {
+        setStatus("Select a node first.", true);
+        return;
+      }
+      if (kind === "source") {
+        state.edgeDraft.sourceId = state.selectedId;
+      } else {
+        state.edgeDraft.targetId = state.selectedId;
+      }
+      renderEdgeDraft();
+    }
+
+    async function createEdgeFromDraft() {
+      if (!state.edgeDraft.sourceId || !state.edgeDraft.targetId) {
+        setStatus("Choose both source and target nodes.", true);
+        return;
+      }
+      if (state.edgeDraft.sourceId === state.edgeDraft.targetId) {
+        setStatus("Choose two different nodes for a manual edge.", true);
+        return;
+      }
+      const button = document.querySelector("#createEdgeButton");
+      button.disabled = true;
+      try {
+        const edge = await requestJson("/api/edges", {
+          method: "POST",
+          body: JSON.stringify({
+            source_id: state.edgeDraft.sourceId,
+            target_id: state.edgeDraft.targetId,
+            edge_type: newEdgeType.value,
+            weight: Number(document.querySelector("#newEdgeWeight").value || 1),
+            user_comment: document.querySelector("#newEdgeComment").value.trim() || null,
+            metadata: { entry_mode: "graph_manual" },
+          }),
+        });
+        state.edgeDraft = { sourceId: null, targetId: null };
+        document.querySelector("#newEdgeComment").value = "";
+        document.querySelector("#newEdgeWeight").value = "1";
+        newEdgeType.value = "derived_from";
+        await loadGraph(edge.source_id);
+      } catch (error) {
+        setStatus(error.message, true);
+      } finally {
+        button.disabled = false;
+      }
+    }
+
+    function clearEdgeDraft() {
+      state.edgeDraft = { sourceId: null, targetId: null };
+      document.querySelector("#newEdgeComment").value = "";
+      document.querySelector("#newEdgeWeight").value = "1";
+      newEdgeType.value = "derived_from";
+      renderEdgeDraft();
     }
 
     function setupEvents() {
@@ -1357,7 +1673,13 @@
       });
 
       document.querySelector("#fitGraph").addEventListener("click", fitGraph);
-      document.querySelector("#refreshGraph").addEventListener("click", loadGraph);
+      document.querySelector("#refreshGraph").addEventListener("click", () => loadGraph());
+      document.querySelector("#createNodeButton").addEventListener("click", createNodeFromForm);
+      document.querySelector("#saveNodeButton").addEventListener("click", saveSelectedNode);
+      document.querySelector("#setEdgeSource").addEventListener("click", () => setEdgeEndpoint("source"));
+      document.querySelector("#setEdgeTarget").addEventListener("click", () => setEdgeEndpoint("target"));
+      document.querySelector("#createEdgeButton").addEventListener("click", createEdgeFromDraft);
+      document.querySelector("#clearEdgeDraft").addEventListener("click", clearEdgeDraft);
       document.querySelector("#openInbox").addEventListener("click", () => {
         window.location.href = "/app";
       });
@@ -1383,7 +1705,7 @@
       });
     }
 
-    async function loadGraph() {
+    async function loadGraph(selectAfterLoad = null) {
       setStatus("Loading graph...");
       status.classList.remove("error");
       try {
@@ -1395,6 +1717,11 @@
         state.nodes = (nodePayload.nodes || []).map((node) => ({ ...node }));
         state.edges = (edgePayload.edges || []).map((edge) => ({ ...edge }));
         state.stats = stats;
+        if (selectAfterLoad) {
+          state.selectedId = selectAfterLoad;
+        } else if (state.selectedId && !state.nodes.some((node) => node.id === state.selectedId)) {
+          state.selectedId = null;
+        }
         normalizeGraph(state.nodes, state.edges);
         rerenderWithLayout();
         fitGraph();
@@ -1403,6 +1730,7 @@
       }
     }
 
+    populateTypeSelects();
     renderFilterChips();
     setupEvents();
     applyTheme(loadTheme());

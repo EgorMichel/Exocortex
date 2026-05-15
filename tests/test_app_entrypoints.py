@@ -25,6 +25,13 @@ def _disable_llm(monkeypatch):
     monkeypatch.setenv("OLLAMA_BASE_URL", "")
 
 
+def _reset_route_state():
+    routes._repository = None
+    routes._llm_service = None
+    routes._agent = None
+    routes._personalization_service = None
+
+
 def test_load_settings_reads_env(monkeypatch, tmp_path):
     storage_path = tmp_path / "graph"
     monkeypatch.setenv("STORAGE_PATH", str(storage_path))
@@ -117,6 +124,10 @@ def test_reader_app_is_served(monkeypatch, tmp_path):
     assert 'id="themeToggle"' in reader_response.text
     assert 'id="thoughtInput"' in reader_response.text
     assert 'id="sourceInput"' in reader_response.text
+    assert 'id="selectionNodeType"' in reader_response.text
+    assert 'id="selectionTagsInput"' in reader_response.text
+    assert 'id="thoughtNodeType"' in reader_response.text
+    assert 'id="thoughtTagsInput"' in reader_response.text
     assert 'id="menuAddSource"' in reader_response.text
     assert "Add as Idea" in reader_response.text
     assert "Add as Source" in reader_response.text
@@ -145,6 +156,9 @@ def test_graph_app_is_served(monkeypatch, tmp_path):
     assert "/api/edges?limit=1000" in graph_response.text
     assert 'id="themeToggle"' in graph_response.text
     assert 'id="graphSvg"' in graph_response.text
+    assert 'id="createNodeButton"' in graph_response.text
+    assert 'id="saveNodeButton"' in graph_response.text
+    assert 'id="createEdgeButton"' in graph_response.text
 
 
 def test_api_add_knowledge_uses_configured_storage(monkeypatch, tmp_path):
@@ -285,6 +299,208 @@ def test_api_add_manual_thought_with_source_text(monkeypatch, tmp_path):
     assert node.content == "Capital accumulation can intensify bargaining asymmetry."
     assert node.source_text == "A paragraph from the book about capital and labor bargaining."
     assert repo.get_all_fragments()[0].content == node.source_text
+
+
+def test_api_create_and_update_manual_node(monkeypatch, tmp_path):
+    _disable_llm(monkeypatch)
+    storage_path = tmp_path / "api_manual_node_graph"
+    monkeypatch.setenv("STORAGE_PATH", str(storage_path))
+    _reset_route_state()
+
+    client = TestClient(routes.app)
+    create_response = client.post(
+        "/api/nodes",
+        json={
+            "content": "Manual graph nodes should be first-class.",
+            "node_type": "idea",
+            "source_text": "Reader context",
+            "title": "Manual nodes",
+            "tags": ["graph", "manual", "graph"],
+            "user_comment": "Created from graph UI.",
+            "trust_status": "suggested",
+            "origin": "llm",
+            "review_status": "pending",
+            "metadata": {"entry_mode": "test"},
+        },
+    )
+
+    assert create_response.status_code == 200
+    created = create_response.json()
+    assert created["node_type"] == "idea"
+    assert created["title"] == "Manual nodes"
+    assert created["tags"] == ["graph", "manual"]
+    assert created["user_comment"] == "Created from graph UI."
+    assert created["trust_status"] == "confirmed"
+    assert created["origin"] == "user"
+    assert created["review_status"] == "accepted"
+
+    patch_response = client.patch(
+        f"/api/nodes/{created['id']}",
+        json={
+            "content": "Manual graph nodes can be edited.",
+            "node_type": "conclusion",
+            "title": "Edited node",
+            "tags": ["edited"],
+            "user_comment": "Updated comment.",
+        },
+    )
+
+    assert patch_response.status_code == 200
+    updated = patch_response.json()
+    assert updated["content"] == "Manual graph nodes can be edited."
+    assert updated["node_type"] == "conclusion"
+    assert updated["title"] == "Edited node"
+    assert updated["tags"] == ["edited"]
+    assert updated["user_comment"] == "Updated comment."
+
+    repo = GraphRepository(storage_path=str(storage_path))
+    node = repo.get_node(created["id"])
+    assert node is not None
+    assert node.node_type == NodeType.CONCLUSION
+    assert node.tags == ["edited"]
+
+
+def test_api_create_and_update_manual_edge(monkeypatch, tmp_path):
+    _disable_llm(monkeypatch)
+    storage_path = tmp_path / "api_manual_edge_graph"
+    monkeypatch.setenv("STORAGE_PATH", str(storage_path))
+    _reset_route_state()
+
+    repo = GraphRepository(storage_path=str(storage_path))
+    source = Node(content="Source idea", node_type=NodeType.IDEA)
+    target = Node(content="Target conclusion", node_type=NodeType.CONCLUSION)
+    third = Node(content="Third fact", node_type=NodeType.FACT)
+    repo.add_node(source)
+    repo.add_node(target)
+    repo.add_node(third)
+    repo.save()
+
+    client = TestClient(routes.app)
+    create_response = client.post(
+        "/api/edges",
+        json={
+            "source_id": source.id,
+            "target_id": target.id,
+            "edge_type": "derived_from",
+            "weight": 0.75,
+            "user_comment": "Manual reasoning link.",
+            "trust_status": "suggested",
+            "origin": "agent",
+            "review_status": "pending",
+            "metadata": {"entry_mode": "test"},
+        },
+    )
+
+    assert create_response.status_code == 200
+    created = create_response.json()
+    assert created["edge_type"] == "derived_from"
+    assert created["weight"] == 0.75
+    assert created["user_comment"] == "Manual reasoning link."
+    assert created["trust_status"] == "confirmed"
+    assert created["origin"] == "user"
+    assert created["review_status"] == "accepted"
+
+    patch_response = client.patch(
+        f"/api/edges/{created['id']}",
+        json={
+            "target_id": third.id,
+            "edge_type": "contradicts",
+            "weight": 0.4,
+            "user_comment": "Updated edge comment.",
+        },
+    )
+
+    assert patch_response.status_code == 200
+    updated = patch_response.json()
+    assert updated["target_id"] == third.id
+    assert updated["edge_type"] == "contradicts"
+    assert updated["weight"] == 0.4
+    assert updated["user_comment"] == "Updated edge comment."
+
+    reloaded = GraphRepository(storage_path=str(storage_path))
+    edge = reloaded.get_edge(created["id"])
+    assert edge is not None
+    assert edge.target_id == third.id
+    assert edge.edge_type.value == "contradicts"
+
+
+def test_reader_manual_fragments_keep_defaults_and_tags(monkeypatch, tmp_path):
+    _disable_llm(monkeypatch)
+    storage_path = tmp_path / "api_reader_tags_graph"
+    monkeypatch.setenv("STORAGE_PATH", str(storage_path))
+    _reset_route_state()
+
+    client = TestClient(routes.app)
+    quote_response = client.post(
+        "/api/manual-fragments",
+        json={
+            "text": "Selected quote text.",
+            "source_type": "reader",
+            "tags": ["quote", "reader", "quote"],
+        },
+    )
+    idea_response = client.post(
+        "/api/manual-fragments",
+        json={
+            "text": "My thought about the quote.",
+            "source_text": "Selected quote text.",
+            "source_type": "reader",
+            "tags": ["idea", "reader"],
+        },
+    )
+
+    assert quote_response.status_code == 200
+    assert idea_response.status_code == 200
+    quote_payload = quote_response.json()
+    idea_payload = idea_response.json()
+    assert quote_payload["node_type"] == "quote"
+    assert idea_payload["node_type"] == "idea"
+
+    repo = GraphRepository(storage_path=str(storage_path))
+    quote = repo.get_node(quote_payload["node_id"])
+    idea = repo.get_node(idea_payload["node_id"])
+    assert quote is not None
+    assert idea is not None
+    assert quote.tags == ["quote", "reader"]
+    assert idea.tags == ["idea", "reader"]
+    assert quote.metadata["tags"] == ["quote", "reader"]
+    assert idea.metadata["tags"] == ["idea", "reader"]
+
+
+def test_legacy_node_and_edge_types_are_rejected(monkeypatch, tmp_path):
+    _disable_llm(monkeypatch)
+    storage_path = tmp_path / "api_legacy_rejected_graph"
+    monkeypatch.setenv("STORAGE_PATH", str(storage_path))
+    _reset_route_state()
+
+    repo = GraphRepository(storage_path=str(storage_path))
+    source = Node(content="A", node_type=NodeType.IDEA)
+    target = Node(content="B", node_type=NodeType.FACT)
+    repo.add_node(source)
+    repo.add_node(target)
+    repo.save()
+
+    client = TestClient(routes.app)
+    node_response = client.post(
+        "/api/nodes",
+        json={"content": "Legacy node", "node_type": "excerpt"},
+    )
+    manual_response = client.post(
+        "/api/manual-fragments",
+        json={"text": "Legacy fragment", "node_type": "thesis"},
+    )
+    edge_response = client.post(
+        "/api/edges",
+        json={
+            "source_id": source.id,
+            "target_id": target.id,
+            "edge_type": "related_to",
+        },
+    )
+
+    assert node_response.status_code == 400
+    assert manual_response.status_code == 400
+    assert edge_response.status_code == 400
 
 
 def test_cli_add_stats_search_and_clear(monkeypatch, tmp_path, capsys):
