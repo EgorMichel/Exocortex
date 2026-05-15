@@ -178,6 +178,10 @@ docker-compose up -d
 - `GET /api/edges` - список связей
 - `POST /api/edges` - создать ручную связь `used_in`, `derived_from` или `contradicts`
 - `PATCH /api/edges/{edge_id}` - отредактировать связь
+- `POST /api/nodes/{node_id}/suggestions` - сгенерировать reviewable предложения для узла
+- `GET /api/suggestions` - получить очередь предложений
+- `POST /api/suggestions/{suggestion_id}/accept` - принять предложение
+- `POST /api/suggestions/{suggestion_id}/reject` - отклонить предложение
 - `GET /api/stats` - статистика графа
 - `GET /api/fragments` - исходные фрагменты
 - `POST /api/agent/analyze` - запустить проактивный анализ графа

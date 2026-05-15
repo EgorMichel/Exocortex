@@ -7,7 +7,7 @@ from app import cli
 from app.agents.insights import Digest, Insight, InsightStore, InsightType
 from app.api import routes
 from app.config import load_settings
-from app.core.models import Node, NodeType, utc_now
+from app.core.models import EdgeType, Node, NodeType, utc_now
 from app.core.repository import GraphRepository
 
 
@@ -641,6 +641,86 @@ def test_legacy_node_types_are_rejected_and_mvp_edge_type_is_accepted(monkeypatc
     assert edge_response.status_code == 200
     assert edge_response.json()["edge_type"] == "used_in"
     assert edge_response.json()["edge_layer"] == "manual"
+
+
+def test_api_suggestions_generate_accept_and_reject(monkeypatch, tmp_path):
+    _disable_llm(monkeypatch)
+    storage_path = tmp_path / "api_suggestions_graph"
+    monkeypatch.setenv("STORAGE_PATH", str(storage_path))
+    _reset_route_state()
+
+    repo = GraphRepository(storage_path=str(storage_path))
+    node = Node(content="Python automation scripts improve repeatable workflows.", node_type=NodeType.IDEA)
+    repo.add_node(node)
+    repo.save()
+
+    client = TestClient(routes.app)
+    generate_response = client.post(f"/api/nodes/{node.id}/suggestions")
+    assert generate_response.status_code == 200
+    generated = generate_response.json()["suggestions"]
+    suggestion_types = {item["suggestion_type"] for item in generated}
+    assert "node_title" in suggestion_types
+    assert "tag" in suggestion_types
+
+    list_response = client.get("/api/suggestions?review_status=pending")
+    assert list_response.status_code == 200
+    assert list_response.json()["total"] == len(generated)
+
+    title_suggestion = next(item for item in generated if item["suggestion_type"] == "node_title")
+    accept_response = client.post(
+        f"/api/suggestions/{title_suggestion['id']}/accept",
+        json={"payload": {"title": "Automation note"}},
+    )
+    assert accept_response.status_code == 200
+    assert accept_response.json()["review_status"] == "accepted"
+    assert accept_response.json()["effects"] == [f"node_title:{node.id}"]
+
+    repo = GraphRepository(storage_path=str(storage_path))
+    assert repo.get_node(node.id).title == "Automation note"
+
+    tag_suggestion = next(item for item in generated if item["suggestion_type"] == "tag")
+    reject_response = client.post(
+        f"/api/suggestions/{tag_suggestion['id']}/reject",
+        json={"note": "Not my vocabulary"},
+    )
+    assert reject_response.status_code == 200
+    assert reject_response.json()["review_status"] == "rejected"
+    assert reject_response.json()["payload"]["rejection_note"] == "Not my vocabulary"
+
+
+def test_api_accept_manual_edge_suggestion_creates_user_edge(monkeypatch, tmp_path):
+    _disable_llm(monkeypatch)
+    storage_path = tmp_path / "api_edge_suggestion_graph"
+    monkeypatch.setenv("STORAGE_PATH", str(storage_path))
+    _reset_route_state()
+
+    repo = GraphRepository(storage_path=str(storage_path))
+    source = Node(content="Python automation scripts improve repeatable data workflows.", node_type=NodeType.IDEA)
+    target = Node(content="Python automation scripts improve reporting workflows.", node_type=NodeType.FACT)
+    repo.add_node(source)
+    repo.add_node(target)
+    repo.save()
+
+    client = TestClient(routes.app)
+    generate_response = client.post(f"/api/nodes/{source.id}/suggestions")
+    assert generate_response.status_code == 200
+    manual_edge = next(
+        item for item in generate_response.json()["suggestions"]
+        if item["suggestion_type"] == "manual_edge"
+    )
+
+    accept_response = client.post(f"/api/suggestions/{manual_edge['id']}/accept", json={})
+    assert accept_response.status_code == 200
+    assert accept_response.json()["review_status"] == "accepted"
+    assert accept_response.json()["effects"][0].startswith("manual_edge:")
+
+    repo = GraphRepository(storage_path=str(storage_path))
+    edges = repo.get_all_edges()
+    assert len(edges) == 1
+    assert edges[0].edge_type == EdgeType.USED_IN
+    assert edges[0].origin.value == "user"
+    assert edges[0].trust_status.value == "confirmed"
+    assert edges[0].metadata["suggested_by"] == "llm"
 
 
 def test_cli_add_stats_search_and_clear(monkeypatch, tmp_path, capsys):

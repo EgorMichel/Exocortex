@@ -9,7 +9,7 @@
 
 Новая базовая модель данных уже приведена к MVP 2-парадигме: старые типы узлов и ручных связей удалены из продуктовой модели, manual capture создает `quote` и `idea`, semantic similarity больше не подтверждается как generic-связь, а ручные узлы и связи стали основным пользовательским действием через API, `/reader` и `/graph`.
 
-Текущий автоматический тестовый набор: **103 теста проходят**.
+Текущий автоматический тестовый набор: **105 тестов проходят**.
 
 ## Этап 1. Чистая модель данных ✅ (100%)
 
@@ -149,7 +149,7 @@
 - [x] Добавлены тесты, что legacy-типы не принимаются.
 - [x] Добавлены тесты, что ручные узлы/связи получают `origin=user`, `trust_status=confirmed`, `review_status=accepted`.
 
-## Этап 4. Предложения LLM при добавлении ⏳ (частично, примерно 35%)
+## Этап 4. Предложения LLM при добавлении ⏳ (частично, примерно 60%)
 
 **Цель:** заменить автоматическое построение графа на подтверждаемые предложения.
 
@@ -160,13 +160,29 @@
 - [x] Есть модель `AgentProposal` с типами `proposed_edge`, `proposed_tag`, `possible_duplicate`, `possible_contradiction`, `reminder`.
 - [x] Есть JSON-хранилище предложений `.proposals.json`.
 - [x] Агент сохраняет hidden connections как proposals без создания edge.
+- [x] Добавлены stage-4 типы proposals/suggestions:
+  - `node_title`;
+  - `node_type`;
+  - `tag`;
+  - `similar_node`;
+  - `manual_edge`;
+  - `duplicate`;
+  - `contradiction`.
+- [x] Добавлен API lifecycle:
+  - `POST /api/nodes/{node_id}/suggestions`;
+  - `GET /api/suggestions`;
+  - `POST /api/suggestions/{suggestion_id}/accept`;
+  - `POST /api/suggestions/{suggestion_id}/reject`.
+- [x] Принятие `node_title`, `node_type`, `tag` применяет изменение к узлу.
+- [x] Принятие `manual_edge` и `contradiction` создаёт подтверждённую manual-связь с `origin=user` и `metadata.suggested_by`.
+- [x] Отклонение сохраняет feedback в payload предложения.
 
 Еще не сделано:
 
-- [ ] Нет API для генерации, списка, принятия и отклонения suggestions.
 - [ ] `/api/knowledge` еще остается extraction endpoint и не переписан в полноценный suggestion flow.
-- [ ] Нет accept/reject логики для LLM-предложений.
-- [ ] Нет полного API lifecycle для LLM suggestions.
+- [ ] Генерация предложений пока базовая локальная/эвристическая, без нового LLM prompt для редактируемых предложений.
+- [ ] Нет UI review flow для предложений при добавлении.
+- [ ] Нет feedback-персонализации на основе отклоненных LLM suggestions.
 
 ## Этап 5. Служебные связи и визуальное разделение слоев ⏳ (частично, примерно 55%)
 
@@ -269,7 +285,7 @@ python -m app.cli clear
 - `venv\Scripts\python -m pytest -q`
 - `venv\Scripts\python -m compileall app`
 - `venv\Scripts\python -m mypy app`
-- Результат: `103 passed`, compileall ok, mypy без ошибок
+- Результат: `105 passed`, compileall ok, mypy без ошибок
 
 ## Последнее обновление
 

@@ -664,10 +664,14 @@ Swagger доступен на `/docs`.
 | `GET` | `/api/nodes/{node_id}` | Получить узел по ID. |
 | `PATCH` | `/api/nodes/{node_id}` | Отредактировать `content`, `node_type`, `source_text`, `title`, `tags`, `user_comment`, статусы и `metadata`. |
 | `PATCH` | `/api/nodes/{node_id}/provenance` | Создать или обновить структурированную provenance-привязку узла. |
+| `POST` | `/api/nodes/{node_id}/suggestions` | Сгенерировать reviewable предложения для узла: title/type/tag/similar/edge/duplicate/contradiction. |
 | `GET` | `/api/nodes/{node_id}/neighbors` | Получить соседей узла. Поддерживает `radius`. |
 | `GET` | `/api/edges` | Получить связи. Поддерживает `edge_type` и `limit`; ответы содержат `edge_layer`. |
 | `POST` | `/api/edges` | Создать ручную связь `used_in`, `derived_from` или `contradicts`. Новые связи получают `edge_layer=manual`, `origin=user`, `trust_status=confirmed`, `review_status=accepted`. |
 | `PATCH` | `/api/edges/{edge_id}` | Отредактировать endpoints связи, тип, вес, комментарий, статусы и `metadata`. |
+| `GET` | `/api/suggestions` | Получить очередь предложений. Поддерживает `review_status` и `limit`. |
+| `POST` | `/api/suggestions/{suggestion_id}/accept` | Принять предложение; для title/type/tag/edge применяет изменение к графу. |
+| `POST` | `/api/suggestions/{suggestion_id}/reject` | Отклонить предложение и сохранить feedback в payload. |
 | `GET` | `/api/stats` | Статистика графа. |
 | `GET` | `/api/fragments` | Список исходных фрагментов. Поддерживает `limit`. |
 | `POST` | `/api/agent/analyze` | Запустить агента, сохранить дайджест и вернуть его. |

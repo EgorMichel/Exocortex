@@ -78,6 +78,13 @@ class ReviewStatus(Enum):
 
 class ProposalType(Enum):
     """Типы предложений, создаваемых агентом."""
+    NODE_TITLE = "node_title"
+    NODE_TYPE = "node_type"
+    TAG = "tag"
+    SIMILAR_NODE = "similar_node"
+    MANUAL_EDGE = "manual_edge"
+    DUPLICATE = "duplicate"
+    CONTRADICTION = "contradiction"
     PROPOSED_EDGE = "proposed_edge"
     PROPOSED_TAG = "proposed_tag"
     POSSIBLE_DUPLICATE = "possible_duplicate"

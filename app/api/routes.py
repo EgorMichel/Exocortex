@@ -18,7 +18,19 @@ from app.agents.insights import Digest, Insight
 from app.agents.proactive import AgentSettings, ProactiveAgent
 from app.agents.scheduler import build_agent_scheduler
 from app.config import load_settings
-from app.core.models import Edge, EdgeLayer, EdgeType, Node, NodeType, Origin, ReviewStatus, SourceProvenance, TrustStatus
+from app.core.models import (
+    AgentProposal,
+    Edge,
+    EdgeLayer,
+    EdgeType,
+    Node,
+    NodeType,
+    Origin,
+    ProposalType,
+    ReviewStatus,
+    SourceProvenance,
+    TrustStatus,
+)
 from app.core.repository import GraphRepository
 from app.llm.extraction import extract_and_store, LLMService
 from app.services.external_sources import ExternalSourceIngestor
@@ -284,6 +296,40 @@ class InterestProfileResponse(BaseModel):
     message_style: str
 
 
+class SuggestionResponse(BaseModel):
+    """Reviewable предложение LLM/агента."""
+    id: str
+    suggestion_type: str
+    proposal_type: str
+    node_ids: List[str]
+    edge_ids: List[str]
+    payload: Dict[str, Any]
+    score: float
+    origin: str
+    review_status: str
+    effects: List[str] = Field(default_factory=list)
+    created_at: str
+
+
+class SuggestionGenerateResponse(BaseModel):
+    """Ответ генерации предложений для узла."""
+    node_id: str
+    suggestions_generated: int
+    suggestions: List[SuggestionResponse]
+
+
+class SuggestionListResponse(BaseModel):
+    """Список reviewable предложений."""
+    suggestions: List[SuggestionResponse]
+    total: int
+
+
+class SuggestionDecisionRequest(BaseModel):
+    """Действие пользователя над предложением."""
+    note: Optional[str] = Field(default=None, description="Комментарий пользователя")
+    payload: Dict[str, Any] = Field(default_factory=dict, description="Отредактированные значения перед accept")
+
+
 # === Lifecycle ===
 
 @asynccontextmanager
@@ -429,6 +475,262 @@ def _inbox_item_response(item: InboxItem) -> InboxItemResponse:
         insight=_insight_response(item.insight),
         feedback=_feedback_response(item.feedback) if item.feedback else None,
     )
+
+
+def _suggestion_type(proposal: AgentProposal) -> str:
+    mapping = {
+        ProposalType.PROPOSED_EDGE: ProposalType.MANUAL_EDGE.value,
+        ProposalType.PROPOSED_TAG: ProposalType.TAG.value,
+        ProposalType.POSSIBLE_DUPLICATE: ProposalType.DUPLICATE.value,
+        ProposalType.POSSIBLE_CONTRADICTION: ProposalType.CONTRADICTION.value,
+    }
+    return mapping.get(proposal.proposal_type, proposal.proposal_type.value)
+
+
+def _suggestion_response(proposal: AgentProposal, effects: Optional[List[str]] = None) -> SuggestionResponse:
+    return SuggestionResponse(
+        id=proposal.id,
+        suggestion_type=_suggestion_type(proposal),
+        proposal_type=proposal.proposal_type.value,
+        node_ids=proposal.node_ids,
+        edge_ids=proposal.edge_ids,
+        payload=proposal.payload,
+        score=proposal.score,
+        origin=proposal.origin.value,
+        review_status=proposal.review_status.value,
+        effects=effects or [],
+        created_at=proposal.created_at.isoformat(),
+    )
+
+
+def _node_label(node: Node) -> str:
+    return node.title or node.content[:80]
+
+
+def _content_terms(text: str) -> list[str]:
+    punctuation = ".,!?;:()[]{}<>\"'`«»“”‘’\n\t\r"
+    stopwords = {
+        "and", "the", "for", "with", "that", "this", "from", "into", "about",
+        "как", "что", "это", "для", "или", "при", "над", "под", "без", "его",
+        "она", "они", "если", "когда", "потому", "через", "между",
+    }
+    terms: list[str] = []
+    for raw in text.lower().split():
+        term = raw.strip(punctuation)
+        if len(term) >= 4 and term not in stopwords and not term.isdigit():
+            terms.append(term)
+    return terms
+
+
+def _term_overlap(left: Node, right: Node) -> float:
+    left_terms = set(_content_terms(f"{left.title or ''} {left.content} {left.source_text or ''}"))
+    right_terms = set(_content_terms(f"{right.title or ''} {right.content} {right.source_text or ''}"))
+    if not left_terms or not right_terms:
+        return 0.0
+    return len(left_terms & right_terms) / len(left_terms | right_terms)
+
+
+def _short_title(content: str) -> str:
+    words = content.strip().split()
+    title = " ".join(words[:8]).strip(" .,:;")
+    if len(words) > 8:
+        title = f"{title}..."
+    return title or "Untitled"
+
+
+def _suggested_node_type(node: Node) -> Optional[NodeType]:
+    text = node.content.strip().lower()
+    if "?" in text and node.node_type != NodeType.QUESTION:
+        return NodeType.QUESTION
+    if text.startswith(("\"", "'", "«", "“")) and node.node_type != NodeType.QUOTE:
+        return NodeType.QUOTE
+    conclusion_markers = ("therefore", "thus", "следовательно", "итак", "значит", "вывод")
+    if any(marker in text for marker in conclusion_markers) and node.node_type != NodeType.CONCLUSION:
+        return NodeType.CONCLUSION
+    return None
+
+
+def _is_contradiction_candidate(left: Node, right: Node, overlap: float) -> bool:
+    if overlap < 0.2:
+        return False
+    left_text = left.content.lower()
+    right_text = right.content.lower()
+    negative_markers = (" not ", "n't", "не ", "нет ", "never", "никогда")
+    left_negative = any(marker in f" {left_text} " for marker in negative_markers)
+    right_negative = any(marker in f" {right_text} " for marker in negative_markers)
+    return left_negative != right_negative
+
+
+def _proposal_key(proposal_type: ProposalType, node_ids: List[str], payload: Dict[str, Any]) -> tuple[Any, ...]:
+    stable_payload = tuple(sorted((key, str(value)) for key, value in payload.items()))
+    return (proposal_type.value, tuple(node_ids), stable_payload)
+
+
+def _existing_suggestion_keys(repository: GraphRepository) -> set[tuple[Any, ...]]:
+    return {
+        _proposal_key(proposal.proposal_type, proposal.node_ids, proposal.payload)
+        for proposal in repository.get_all_proposals()
+        if proposal.review_status == ReviewStatus.PENDING
+    }
+
+
+def _build_node_suggestions(repository: GraphRepository, node: Node) -> list[AgentProposal]:
+    existing_keys = _existing_suggestion_keys(repository)
+    suggestions: list[AgentProposal] = []
+
+    def add(proposal_type: ProposalType, node_ids: List[str], payload: Dict[str, Any], score: float) -> None:
+        key = _proposal_key(proposal_type, node_ids, payload)
+        if key in existing_keys:
+            return
+        suggestions.append(AgentProposal(
+            proposal_type=proposal_type,
+            node_ids=node_ids,
+            payload=payload,
+            score=score,
+            origin=Origin.LLM,
+            review_status=ReviewStatus.PENDING,
+        ))
+        existing_keys.add(key)
+
+    if not node.title:
+        add(
+            ProposalType.NODE_TITLE,
+            [node.id],
+            {"title": _short_title(node.content), "source": "node_suggestions"},
+            0.7,
+        )
+
+    suggested_type = _suggested_node_type(node)
+    if suggested_type:
+        add(
+            ProposalType.NODE_TYPE,
+            [node.id],
+            {"node_type": suggested_type.value, "current_node_type": node.node_type.value},
+            0.65,
+        )
+
+    for tag in _content_terms(node.content)[:3]:
+        if tag not in node.tags:
+            add(ProposalType.TAG, [node.id], {"tag": tag}, 0.45)
+
+    for other in repository.get_all_nodes():
+        if other.id == node.id:
+            continue
+        overlap = _term_overlap(node, other)
+        if node.content.strip().lower() == other.content.strip().lower() or overlap >= 0.85:
+            add(
+                ProposalType.DUPLICATE,
+                [node.id, other.id],
+                {"duplicate_node_id": other.id, "duplicate_title": _node_label(other), "overlap": overlap},
+                max(0.9, overlap),
+            )
+        elif overlap >= 0.25:
+            add(
+                ProposalType.SIMILAR_NODE,
+                [node.id, other.id],
+                {"similar_node_id": other.id, "similar_title": _node_label(other), "overlap": overlap},
+                overlap,
+            )
+            add(
+                ProposalType.MANUAL_EDGE,
+                [node.id, other.id],
+                {
+                    "source_id": node.id,
+                    "target_id": other.id,
+                    "edge_type": EdgeType.USED_IN.value,
+                    "reason": "similar_node",
+                    "suggested_by": "llm",
+                },
+                overlap,
+            )
+        if _is_contradiction_candidate(node, other, overlap):
+            add(
+                ProposalType.CONTRADICTION,
+                [node.id, other.id],
+                {
+                    "source_id": node.id,
+                    "target_id": other.id,
+                    "edge_type": EdgeType.CONTRADICTS.value,
+                    "reason": "opposite_negation_marker",
+                    "suggested_by": "llm",
+                },
+                max(0.7, overlap),
+            )
+
+    return suggestions
+
+
+def _accept_suggestion(repository: GraphRepository, proposal: AgentProposal, edited_payload: Dict[str, Any]) -> list[str]:
+    payload = dict(proposal.payload)
+    payload.update({key: value for key, value in edited_payload.items() if value is not None})
+    proposal.payload = payload
+    effects: list[str] = []
+    suggestion_type = _suggestion_type(proposal)
+
+    if suggestion_type == ProposalType.NODE_TITLE.value:
+        node = repository.get_node(proposal.node_ids[0]) if proposal.node_ids else None
+        if not node:
+            raise ValueError("Suggestion node not found")
+        title = str(payload.get("title") or "").strip()
+        if not title:
+            raise ValueError("Accepted title suggestion requires payload.title")
+        node.title = title
+        node.review_status = ReviewStatus.EDITED if edited_payload else ReviewStatus.ACCEPTED
+        repository.update_node(node)
+        effects.append(f"node_title:{node.id}")
+
+    elif suggestion_type == ProposalType.NODE_TYPE.value:
+        node = repository.get_node(proposal.node_ids[0]) if proposal.node_ids else None
+        if not node:
+            raise ValueError("Suggestion node not found")
+        node_type = NodeType(str(payload.get("node_type")))
+        node.node_type = node_type
+        node.review_status = ReviewStatus.EDITED if edited_payload else ReviewStatus.ACCEPTED
+        repository.update_node(node)
+        effects.append(f"node_type:{node.id}")
+
+    elif suggestion_type == ProposalType.TAG.value:
+        node = repository.get_node(proposal.node_ids[0]) if proposal.node_ids else None
+        if not node:
+            raise ValueError("Suggestion node not found")
+        tag = str(payload.get("tag") or "").strip()
+        if not tag:
+            raise ValueError("Accepted tag suggestion requires payload.tag")
+        if tag not in node.tags:
+            node.tags.append(tag)
+        node._sync_standard_metadata()
+        repository.update_node(node)
+        effects.append(f"tag:{node.id}:{tag}")
+
+    elif suggestion_type in {ProposalType.MANUAL_EDGE.value, ProposalType.CONTRADICTION.value}:
+        source_id = str(payload.get("source_id") or (proposal.node_ids[0] if proposal.node_ids else ""))
+        target_id = str(payload.get("target_id") or (proposal.node_ids[1] if len(proposal.node_ids) > 1 else ""))
+        if not repository.get_node(source_id) or not repository.get_node(target_id):
+            raise ValueError("Accepted edge suggestion requires existing source and target nodes")
+        edge_type = EdgeType(str(payload.get("edge_type") or EdgeType.USED_IN.value))
+        edge = Edge(
+            source_id=source_id,
+            target_id=target_id,
+            edge_type=edge_type,
+            edge_layer=EdgeLayer.MANUAL,
+            weight=float(payload.get("weight") or proposal.score or 1.0),
+            metadata={
+                "suggested_by": payload.get("suggested_by") or proposal.origin.value,
+                "suggestion_id": proposal.id,
+                "review_source": "suggestion_accept",
+            },
+            trust_status=TrustStatus.CONFIRMED,
+            origin=Origin.USER,
+            review_status=ReviewStatus.ACCEPTED,
+            user_comment=str(payload.get("user_comment") or "").strip() or None,
+        )
+        repository.add_edge(edge)
+        proposal.edge_ids.append(edge.id)
+        effects.append(f"manual_edge:{edge.id}")
+
+    proposal.review_status = ReviewStatus.ACCEPTED
+    repository.update_proposal(proposal)
+    return effects
 
 
 def _clean_tags(tags: Optional[List[str]]) -> List[str]:
@@ -796,6 +1098,82 @@ async def update_node_provenance(node_id: str, request: SourceProvenanceRequest)
     if repository.storage_path:
         repository.save()
     return _node_response(node)
+
+
+@app.post("/api/nodes/{node_id}/suggestions", response_model=SuggestionGenerateResponse)
+async def generate_node_suggestions(node_id: str):
+    """Сгенерировать reviewable предложения для существующего узла."""
+    repository = get_repository()
+    node = repository.get_node(node_id)
+    if not node:
+        raise HTTPException(status_code=404, detail="Node not found")
+
+    suggestions = _build_node_suggestions(repository, node)
+    for suggestion in suggestions:
+        repository.add_proposal(suggestion)
+    if suggestions and repository.storage_path:
+        repository.save()
+    return SuggestionGenerateResponse(
+        node_id=node_id,
+        suggestions_generated=len(suggestions),
+        suggestions=[_suggestion_response(suggestion) for suggestion in suggestions],
+    )
+
+
+@app.get("/api/suggestions", response_model=SuggestionListResponse)
+async def get_suggestions(review_status: Optional[str] = None, limit: int = 100):
+    """Получить очередь предложений с опциональной фильтрацией по review_status."""
+    repository = get_repository()
+    try:
+        status = ReviewStatus(review_status) if review_status else None
+    except ValueError:
+        raise HTTPException(status_code=400, detail=f"Invalid review_status: {review_status}")
+    suggestions = repository.get_all_proposals(review_status=status)[:limit]
+    return SuggestionListResponse(
+        suggestions=[_suggestion_response(suggestion) for suggestion in suggestions],
+        total=len(suggestions),
+    )
+
+
+@app.post("/api/suggestions/{suggestion_id}/accept", response_model=SuggestionResponse)
+async def accept_suggestion(suggestion_id: str, request: SuggestionDecisionRequest):
+    """Принять предложение и применить его эффект к ручному графу, если он есть."""
+    repository = get_repository()
+    proposal = repository.get_proposal(suggestion_id)
+    if not proposal:
+        raise HTTPException(status_code=404, detail="Suggestion not found")
+    if proposal.review_status != ReviewStatus.PENDING:
+        raise HTTPException(status_code=400, detail="Suggestion is already reviewed")
+    try:
+        effects = _accept_suggestion(repository, proposal, request.payload)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    if request.note:
+        proposal.payload["user_comment"] = request.note.strip()
+        repository.update_proposal(proposal)
+    if repository.storage_path:
+        repository.save()
+    return _suggestion_response(proposal, effects=effects)
+
+
+@app.post("/api/suggestions/{suggestion_id}/reject", response_model=SuggestionResponse)
+async def reject_suggestion(suggestion_id: str, request: SuggestionDecisionRequest):
+    """Отклонить предложение и сохранить feedback в payload."""
+    repository = get_repository()
+    proposal = repository.get_proposal(suggestion_id)
+    if not proposal:
+        raise HTTPException(status_code=404, detail="Suggestion not found")
+    if proposal.review_status != ReviewStatus.PENDING:
+        raise HTTPException(status_code=400, detail="Suggestion is already reviewed")
+    if request.note:
+        proposal.payload["rejection_note"] = request.note.strip()
+    if request.payload:
+        proposal.payload["rejection_feedback"] = request.payload
+    proposal.review_status = ReviewStatus.REJECTED
+    repository.update_proposal(proposal)
+    if repository.storage_path:
+        repository.save()
+    return _suggestion_response(proposal, effects=[f"suggestion_rejected:{proposal.id}"])
 
 
 @app.post("/api/edges", response_model=EdgeResponse)

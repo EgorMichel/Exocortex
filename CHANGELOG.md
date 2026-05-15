@@ -20,6 +20,11 @@
   - Выбор двух узлов source/target и создание ручной связи `used_in`, `derived_from` или `contradicts`
   - Выбор MVP 2-типа и ввод тегов в `/reader`; теги сохраняются в стандартное поле `tags`
   - Ручные узлы и связи при создании получают `origin=user`, `trust_status=confirmed`, `review_status=accepted`
+- **MVP 2 Этап 4: базовый lifecycle предложений**:
+  - API `POST /api/nodes/{node_id}/suggestions` генерирует reviewable предложения для title/type/tag/similar/manual edge/duplicate/contradiction
+  - API `GET /api/suggestions`, `POST /api/suggestions/{suggestion_id}/accept`, `POST /api/suggestions/{suggestion_id}/reject`
+  - Принятие предложений title/type/tag обновляет узел; принятие manual edge/contradiction создаёт подтверждённую ручную связь с `suggested_by`
+  - Отклонение предложения сохраняет feedback в payload и переводит proposal в `review_status=rejected`
 - **Запуск приложения**:
   - Точка входа `python -m app.main` для FastAPI-сервера
   - CLI `python -m app.cli` с командами `add`, `stats`, `list`, `search`, `forgotten`, `clear`
