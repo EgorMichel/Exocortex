@@ -31,27 +31,16 @@ class NodeType(Enum):
 
 class EdgeType(Enum):
     """Типы связей между узлами."""
-    RELATED_TO = "related_to"       # Связано с
-    SUPPORTS = "supports"           # Подтверждает
+    USED_IN = "used_in"             # Используется в
     CONTRADICTS = "contradicts"     # Противоречит
     DERIVED_FROM = "derived_from"   # Следует из / является следствием
-    EXAMPLE_OF = "example_of"       # Является примером
-    CLARIFIES = "clarifies"         # Уточняет
-    USED_IN = "related_to"          # Legacy alias; persisted used_in migrates to related_to.
-
-
-LEGACY_EDGE_TYPE_MAP = {
-    "used_in": EdgeType.RELATED_TO,
-}
 
 
 def coerce_edge_type(value: "EdgeType | str") -> EdgeType:
-    """Normalize legacy edge type values to the current MVP vocabulary."""
+    """Validate an edge type value against the current MVP vocabulary."""
     if isinstance(value, EdgeType):
         return value
     normalized = str(value).strip()
-    if normalized in LEGACY_EDGE_TYPE_MAP:
-        return LEGACY_EDGE_TYPE_MAP[normalized]
     return EdgeType(normalized)
 
 
@@ -429,7 +418,7 @@ class Edge:
     """
     source_id: str
     target_id: str
-    edge_type: EdgeType = EdgeType.RELATED_TO
+    edge_type: EdgeType = EdgeType.USED_IN
     edge_layer: EdgeLayer = EdgeLayer.MANUAL
     weight: float = 1.0
     id: str = field(default_factory=lambda: str(uuid.uuid4()))

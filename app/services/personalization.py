@@ -441,7 +441,7 @@ class PersonalizationService:
 
     def _selected_edge_type(self, edge_type: Optional[str | EdgeType]) -> EdgeType:
         if edge_type is None:
-            return EdgeType.RELATED_TO
+            return EdgeType.USED_IN
         if isinstance(edge_type, EdgeType):
             return edge_type
         return EdgeType(edge_type)

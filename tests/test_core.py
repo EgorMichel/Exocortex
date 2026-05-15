@@ -439,13 +439,13 @@ class TestGraphRepository:
         for node in (center, incoming, outgoing, service):
             repo.add_node(node)
 
-        repo.add_edge(Edge(source_id=incoming.id, target_id=center.id, edge_type=EdgeType.RELATED_TO))
-        repo.add_edge(Edge(source_id=center.id, target_id=outgoing.id, edge_type=EdgeType.RELATED_TO))
+        repo.add_edge(Edge(source_id=incoming.id, target_id=center.id, edge_type=EdgeType.USED_IN))
+        repo.add_edge(Edge(source_id=center.id, target_id=outgoing.id, edge_type=EdgeType.USED_IN))
         repo.add_edge(
             Edge(
                 source_id=center.id,
                 target_id=service.id,
-                edge_type=EdgeType.RELATED_TO,
+                edge_type=EdgeType.USED_IN,
                 edge_layer=EdgeLayer.SERVICE,
             )
         )
@@ -481,7 +481,7 @@ class TestGraphRepository:
         repo.add_node(node1)
         repo.add_node(node2)
 
-        edge = Edge(source_id=node2.id, target_id=node1.id, edge_type=EdgeType.SUPPORTS)
+        edge = Edge(source_id=node2.id, target_id=node1.id, edge_type=EdgeType.DERIVED_FROM)
         repo.add_edge(edge)
 
         related = repo.get_related_nodes(node1.id)
@@ -491,25 +491,23 @@ class TestGraphRepository:
         assert related_node.id == node2.id
         assert related_edge.source_id == node2.id
 
-    def test_legacy_used_in_edges_migrate_to_related_to(self, repo):
-        """Old persisted used_in values are normalized to related_to."""
+    def test_old_non_mvp_edge_types_are_rejected(self, repo):
+        """Old persisted edge type values are no longer accepted in the MVP model."""
         node1 = Node(content="A")
         node2 = Node(content="B")
         repo.add_node(node1)
         repo.add_node(node2)
 
-        edge = Edge.from_dict({
-            "id": "legacy-edge",
-            "source_id": node1.id,
-            "target_id": node2.id,
-            "edge_type": "used_in",
-            "weight": 1.0,
-            "metadata": "{}",
-            "created_at": utc_now().isoformat(),
-        })
-        repo.add_edge(edge)
-
-        assert repo.get_edge("legacy-edge").edge_type == EdgeType.RELATED_TO
+        with pytest.raises(ValueError):
+            Edge.from_dict({
+                "id": "legacy-edge",
+                "source_id": node1.id,
+                "target_id": node2.id,
+                "edge_type": "related_to",
+                "weight": 1.0,
+                "metadata": "{}",
+                "created_at": utc_now().isoformat(),
+            })
     
     def test_add_and_get_fragment(self, repo):
         """Добавление и получение фрагмента."""

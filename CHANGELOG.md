@@ -17,7 +17,7 @@
   - Пользовательские endpoints `POST /api/nodes`, `PATCH /api/nodes/{node_id}`, `POST /api/edges`, `PATCH /api/edges/{edge_id}`
   - Создание ручных узлов и связей в `/graph`
   - Редактирование выбранного узла в боковой панели `/graph`
-  - Выбор двух узлов source/target и создание ручной связи `related_to`, `supports`, `contradicts`, `derived_from`, `example_of` или `clarifies`
+  - Выбор двух узлов source/target и создание ручной связи `used_in`, `derived_from` или `contradicts`
   - Выбор MVP 2-типа и ввод тегов в `/reader`; теги сохраняются в стандартное поле `tags`
   - Ручные узлы и связи при создании получают `origin=user`, `trust_status=confirmed`, `review_status=accepted`
 - **Запуск приложения**:
@@ -34,7 +34,7 @@
   - `Node`: Узел графа знаний с полями id, тип, содержание, редактируемый `source_text`, метаданные, `trust_status`, `origin`, `review_status`, `user_comment`, `title`, `tags`, параметры памяти (strength, decay_rate, last_interacted)
   - `Edge`: Ручная логическая связь между узлами с полями id, тип, слой, источник, цель, вес, метаданные, `trust_status`, `origin`, `review_status`, `user_comment`
   - `NodeType`: MVP 2-типы узлов (IDEA, FACT, QUOTE, QUESTION, CONCLUSION, SOURCE)
-  - `EdgeType`: MVP-типы ручных связей (`RELATED_TO`, `SUPPORTS`, `CONTRADICTS`, `DERIVED_FROM`, `EXAMPLE_OF`, `CLARIFIES`); persisted `used_in` мигрирует в `related_to`
+  - `EdgeType`: MVP-типы ручных связей (`USED_IN`, `DERIVED_FROM`, `CONTRADICTS`)
   - `TrustStatus`, `Origin`, `ReviewStatus`: стандартизированные статусы доверия, происхождения и проверки
   - `KnowledgeFragment`: Исходный фрагмент знания с метаданными и `llm_status`/`warnings`/`errors`
   - `AgentProposal`: Reviewable предложения агента (`proposed_edge`, `proposed_tag`, `possible_duplicate`, `possible_contradiction`, `reminder`)
@@ -91,7 +91,7 @@
   - JSON-хранилище пользовательских реакций `.feedback.json`
   - Реакции на противоречия, скрытые связи и напоминания
   - Обновление графа на основе feedback: усиление узлов, пометки разрешений, создание подтверждённых противоречий
-  - Hidden connection `confirm/refine` создаёт ручную `related_to`-связь по умолчанию; API feedback может передать выбранный `edge_type`; `reject` закрывает предложение без изменения смыслового графа
+  - Hidden connection `confirm/refine` создаёт ручную `used_in`-связь по умолчанию; API feedback может передать выбранный `edge_type`; `reject` закрывает предложение без изменения смыслового графа
   - Базовая модель интересов: счётчики действий, частоты тем, взаимодействия с узлами, стиль сообщений
   - Встроенный web UI `/app` для inbox, реакций, запуска анализа и просмотра профиля интересов
   - Адаптация приоритизации инсайтов агента по темам, истории реакций и `interest_score` узлов
@@ -111,11 +111,11 @@
   - Текущий набор: 103 автоматических теста
 
 ### Изменено
-- **Breaking change / MVP data model**: Ручные связи переведены на набор `related_to`, `supports`, `contradicts`, `derived_from`, `example_of`, `clarifies`; persisted `used_in` мигрирует в `related_to`.
+- **Breaking change / MVP data model**: Ручные связи приведены к MVP-набору `used_in`, `derived_from`, `contradicts`; legacy-типы вроде `related_to`, `supports`, `example_of`, `part_of` и `similar_to` больше не являются валидными.
 - **Storage reset**: Для старых графов с legacy-типами рекомендуется очистить storage командой `python -m app.cli clear` перед запуском новой версии.
 - **Manual capture defaults**: Выделенный фрагмент теперь создаёт `quote`, пользовательская мысль с `source_text` создаёт `idea`.
 - **Graph UI**: Списки фильтров и визуальные классы обновлены под MVP 2-типы узлов и связей; интерфейс позволяет создавать узлы, редактировать выбранный узел и создавать ручную связь между двумя выбранными узлами.
-- **LLM extraction**: Prompt/schema используют `related_to`, `supports`, `contradicts`, `derived_from`, `example_of`, `clarifies`; автоматические `source`-узлы запрещены и отбрасываются.
+- **LLM extraction**: Prompt/schema используют `used_in`, `derived_from`, `contradicts`; автоматические `source`-узлы запрещены и отбрасываются.
 - **API responses**: Узлы и связи возвращают стандартизированные поля `trust_status`, `origin`, `review_status`, `user_comment`; связи также возвращают `edge_layer`, узлы возвращают `title` и `tags`.
 - **API responses**: `/api/knowledge` и `/api/sources` возвращают `llm_status`, `warnings`, `errors`.
 - **API responses**: Узлы также возвращают структурированную provenance-привязку; `source_text` сохранён для совместимости.

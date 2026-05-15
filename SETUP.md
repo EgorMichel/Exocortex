@@ -176,7 +176,7 @@ docker-compose up -d
 - `PATCH /api/nodes/{node_id}/provenance` - создать или обновить provenance-привязку узла: `source_id`, URL/путь, title, author, dates, offsets, `source_text`, comment
 - `GET /api/nodes/{node_id}/neighbors` - соседние узлы
 - `GET /api/edges` - список связей
-- `POST /api/edges` - создать ручную связь `related_to`, `supports`, `contradicts`, `derived_from`, `example_of` или `clarifies`
+- `POST /api/edges` - создать ручную связь `used_in`, `derived_from` или `contradicts`
 - `PATCH /api/edges/{edge_id}` - отредактировать связь
 - `GET /api/stats` - статистика графа
 - `GET /api/fragments` - исходные фрагменты
@@ -311,7 +311,7 @@ python -m app.main
 
 Откройте `http://127.0.0.1:8000/reader`, загрузите UTF-8 текстовый или Markdown-файл. Выделенный фрагмент по умолчанию сохраняется как `quote`, но перед сохранением можно выбрать knowledge-тип и указать теги. Пользовательская мысль в правой панели по умолчанию сохраняется как `idea`; для неё тоже можно изменить тип и добавить теги. Сценарий для изучения книги: напишите мысль, выделите абзац-источник и выберите `Add as Source`, при необходимости отредактируйте источник или скройте его кнопкой `Hide`, затем нажмите `Add Idea`. Читалка отправляет на сервер мысль, источник, имя файла, смещения выделения и стандартное поле `tags`; сервер присваивает общий `source_id` для файла/URL. LLM при этом не вызывается. Reader/capture не создаёт `source`-узлы и не создаёт `derived_from`-ребро к источнику.
 
-Откройте `http://127.0.0.1:8000/graph`, чтобы создать узел напрямую в графе, отредактировать выбранный узел в правой панели или выбрать два узла как source/target и создать ручную связь `related_to`, `supports`, `contradicts`, `derived_from`, `example_of` или `clarifies` с пользовательским комментарием. Боковая панель показывает provenance выбранного узла, ссылку `Open Source` при наличии URL/пути и кнопку подсветки узлов с тем же `source_id`.
+Откройте `http://127.0.0.1:8000/graph`, чтобы создать узел напрямую в графе, отредактировать выбранный узел в правой панели или выбрать два узла как source/target и создать ручную связь `used_in`, `derived_from` или `contradicts` с пользовательским комментарием. Боковая панель показывает provenance выбранного узла, ссылку `Open Source` при наличии URL/пути и кнопку подсветки узлов с тем же `source_id`.
 
 ## Добавление текстовых источников
 
@@ -372,7 +372,7 @@ python -m pytest -q                  # Linux/macOS после активации
 - inbox инсайтов, реакции пользователя и обновление графа по feedback
 - ручное сохранение выделенных фрагментов как `quote` и мыслей с `source_text` как `idea` через API, CLI и `/reader`
 - ручное создание и редактирование узлов через `POST /api/nodes`, `PATCH /api/nodes/{node_id}` и `/graph`
-- ручное создание и редактирование связей `related_to`, `supports`, `contradicts`, `derived_from`, `example_of`, `clarifies` через `POST /api/edges`, `PATCH /api/edges/{edge_id}` и `/graph`
+- ручное создание и редактирование связей `used_in`, `derived_from`, `contradicts` через `POST /api/edges`, `PATCH /api/edges/{edge_id}` и `/graph`
 - structured provenance у узлов через `/reader`, `/api/nodes` и `PATCH /api/nodes/{node_id}/provenance`
 - базовая модель интересов и статистика взаимодействий
 - фоновый запуск агента через APScheduler

@@ -38,7 +38,7 @@ class ExtractedRelation(BaseModel):
     """Связь между сущностями."""
     source: str = Field(description="Название исходной сущности")
     target: str = Field(description="Название целевой сущности")
-    type: str = Field(description="Тип связи: related_to, supports, contradicts, derived_from, example_of, clarifies")
+    type: str = Field(description="Тип связи: used_in, derived_from, contradicts")
     description: str = Field(default="", description="Описание связи")
     confidence: float = Field(default=1.0, description="Уверенность в связи (0-1)")
 
@@ -144,7 +144,7 @@ Extract entities and relationships in JSON format with this exact structure:
         {{
             "source": "source entity name",
             "target": "target entity name",
-            "type": "related_to|supports|contradicts|derived_from|example_of|clarifies",
+            "type": "used_in|derived_from|contradicts",
             "description": "description of the relationship",
             "confidence": 0.9
         }}
@@ -156,12 +156,9 @@ Rules:
 - Extract only meaningful, standalone entities
 - Use only the listed node and relationship enum values
 - Never create source entities; sources belong to provenance/context metadata, not to the knowledge graph
-- Do not use generic relatedness or similarity as a manual relationship
-- Use related_to only when the text explicitly says two entities are connected but gives no more specific relation
-- Use supports when one statement confirms or backs another
+- Do not use generic relatedness, support, examples, clarification, or similarity as manual relationships
+- Use used_in only when one entity is explicitly used in another entity, argument, conclusion, or context
 - Use derived_from only when the source-target direction is clear: source follows from target
-- Use example_of when one item is an example of another
-- Use clarifies when one item narrows or explains another
 - Use contradicts only for actual contradictions
 - Don't create duplicate entities
 - Only create relationships that are explicitly stated or strongly implied

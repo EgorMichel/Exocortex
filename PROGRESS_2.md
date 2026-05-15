@@ -13,7 +13,7 @@
 
 ## Этап 1. Чистая модель данных ✅ (100%)
 
-**Цель:** привести ядро данных к новой парадигме с минимальной миграцией старых `used_in`-связей.
+**Цель:** привести ядро данных к новой парадигме без legacy-совместимости со старыми типами связей.
 
 - [x] Заменен набор типов узлов на MVP-набор:
   - `idea`;
@@ -28,14 +28,16 @@
   - `concept`;
   - `definition`.
 - [x] Заменен набор ручных типов связей на MVP-набор:
+  - `used_in`;
+  - `contradicts`;
+  - `derived_from`.
+- [x] Legacy-типы связей удалены из продуктовой модели и новой бизнес-логики:
   - `related_to`;
   - `supports`;
-  - `contradicts`;
-  - `derived_from`;
   - `example_of`;
+  - `part_of`;
+  - `similar_to`;
   - `clarifies`.
-- [x] Legacy `used_in` больше не является новым продуктовым типом; persisted `used_in` при загрузке мигрирует в `related_to`.
-- [x] Удалены не-MVP legacy-связи из новой бизнес-логики: `part_of`, `similar_to`.
 - [x] Semantic similarity оставлена как вычисляемый сигнал для hidden connection / suggestion flow, а не как ручная связь.
 - [x] Добавлены явные поля модели и стандарты metadata:
   - `trust_status`;
@@ -58,7 +60,7 @@
 - [x] Обновлен graph UI: списки и стили типов узлов и связей соответствуют MVP 2.
 - [x] Обновлен personalization feedback:
   - contradiction feedback может создавать `contradicts`;
-  - hidden connection `confirm/refine` создаёт manual `related_to` по умолчанию или выбранный API `edge_type`;
+  - hidden connection `confirm/refine` создаёт manual `used_in` по умолчанию или выбранный API `edge_type`;
   - `reject` закрывает предложение без изменения смыслового графа.
 - [x] Обновлены тесты моделей, сериализации, LLM extraction, API/CLI, reader и proactive/personalization flows.
 - [x] Добавлена/уточнена инструкция очистки старого storage: `python -m app.cli clear`.
@@ -66,7 +68,7 @@
 
 Критерий готовности:
 
-- [x] Новая бизнес-логика не создаёт legacy `used_in`; загрузчик хранит совместимость миграцией `used_in -> related_to`.
+- [x] Новая бизнес-логика не создаёт legacy-типы связей и не содержит alias-миграции старого словаря.
 - [x] Новые узлы и связи хранят доверие, происхождение, теги и заголовок.
 - [x] Чистый storage создается и открывается.
 - [x] Тесты проходят.
@@ -251,8 +253,8 @@
 
 ## Текущие ограничения и важные замечания
 
-- Старые `used_in` edge поддерживаются через миграцию в `related_to`; остальные legacy-типы по-прежнему лучше очищать перед запуском.
-- Если в storage есть старые node-типы (`excerpt`, `thesis`, `concept`, `definition`) или старые не-MVP edge-типы (`part_of`, `similar_to`), перед запуском новой версии нужно выполнить:
+- Старые edge-типы больше не поддерживаются через alias-миграцию.
+- Если в storage есть старые node-типы (`excerpt`, `thesis`, `concept`, `definition`) или старые не-MVP edge-типы (`related_to`, `supports`, `example_of`, `part_of`, `similar_to`, `clarifies`), перед запуском новой версии нужно выполнить:
 
 ```bash
 python -m app.cli clear

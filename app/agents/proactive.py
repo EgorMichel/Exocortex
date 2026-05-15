@@ -340,7 +340,7 @@ class ProactiveAgent:
 
     def _default_proposal_edge_type(self, insight: Insight) -> Optional[str]:
         if insight.insight_type == InsightType.HIDDEN_CONNECTION:
-            return EdgeType.RELATED_TO.value
+            return EdgeType.USED_IN.value
         if insight.insight_type == InsightType.CONTRADICTION:
             return EdgeType.CONTRADICTS.value
         return None

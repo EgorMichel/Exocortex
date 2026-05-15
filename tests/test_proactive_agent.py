@@ -543,7 +543,7 @@ def test_personalization_confirm_connection_creates_manual_related_edge(tmp_path
     updated_first = repo.get_node(first.id)
     assert feedback.action == FeedbackAction.CONFIRM
     assert len(edges) == 1
-    assert edges[0].edge_type == EdgeType.RELATED_TO
+    assert edges[0].edge_type == EdgeType.USED_IN
     assert edges[0].edge_layer.value == "manual"
     assert f"manual_edge:{edges[0].id}" in feedback.effects
     assert updated_first.metadata["last_feedback"] == "confirm"

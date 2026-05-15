@@ -71,9 +71,10 @@ class TestLLMExtraction:
         assert "Write all facts, names, descriptions, comments, and summaries in Russian" in prompt
         assert "idea|fact|quote|question|conclusion" in prompt
         assert "source" not in "idea|fact|quote|question|conclusion"
-        assert "related_to|supports|contradicts|derived_from|example_of|clarifies" in prompt
+        assert "used_in|derived_from|contradicts" in prompt
         assert "Never create source entities" in prompt
-        assert "used_in" not in prompt
+        assert "related_to" not in prompt
+        assert "supports" not in prompt
         assert "similar_to" not in prompt
 
     def test_extract_knowledge_system_message_requires_russian_output(self):
@@ -195,7 +196,7 @@ class TestLLMExtraction:
                 ExtractedRelation(
                     source="Статья",
                     target="Факт",
-                    type="related_to",
+                    type="used_in",
                 )
             ],
         )
@@ -225,7 +226,7 @@ class TestLLMExtraction:
                 {
                     "source": "Python",
                     "target": "Data analysis",
-                    "type": "related_to",
+                    "type": "used_in",
                     "description": "Python is used for data analysis",
                     "confidence": 0.8,
                 },

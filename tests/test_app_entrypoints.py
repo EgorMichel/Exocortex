@@ -632,14 +632,14 @@ def test_legacy_node_types_are_rejected_and_mvp_edge_type_is_accepted(monkeypatc
         json={
             "source_id": source.id,
             "target_id": target.id,
-            "edge_type": "related_to",
+            "edge_type": "used_in",
         },
     )
 
     assert node_response.status_code == 400
     assert manual_response.status_code == 400
     assert edge_response.status_code == 200
-    assert edge_response.json()["edge_type"] == "related_to"
+    assert edge_response.json()["edge_type"] == "used_in"
     assert edge_response.json()["edge_layer"] == "manual"
 
 

@@ -392,14 +392,8 @@
       marker-end: url(#arrowDefault);
     }
 
-    .edge.related_to {
+    .edge.used_in {
       stroke: var(--green);
-      marker-end: url(#arrowGreen);
-    }
-
-    .edge.supports {
-      stroke: var(--green);
-      stroke-width: 2.2;
       marker-end: url(#arrowGreen);
     }
 
@@ -411,11 +405,6 @@
 
     .edge.derived_from {
       stroke-dasharray: 7 5;
-    }
-
-    .edge.example_of,
-    .edge.clarifies {
-      stroke-dasharray: 3 5;
     }
 
     .edge.service,
@@ -975,12 +964,9 @@
       source: "Source",
     };
     const EDGE_LABELS = {
-      related_to: "related_to",
-      supports: "supports",
+      used_in: "used_in",
       derived_from: "derived_from",
       contradicts: "contradicts",
-      example_of: "example_of",
-      clarifies: "clarifies",
     };
 
     const state = {
@@ -1097,7 +1083,7 @@
       newEdgeType.innerHTML = Object.keys(EDGE_LABELS).map((type) => (
         `<option value="${escapeHtml(type)}">${escapeHtml(EDGE_LABELS[type])}</option>`
       )).join("");
-      newEdgeType.value = "related_to";
+      newEdgeType.value = "used_in";
     }
 
     function applyTheme(theme) {
@@ -1649,7 +1635,7 @@
         state.edgeDraft = { sourceId: null, targetId: null };
         document.querySelector("#newEdgeComment").value = "";
         document.querySelector("#newEdgeWeight").value = "1";
-        newEdgeType.value = "related_to";
+        newEdgeType.value = "used_in";
         await loadGraph(edge.source_id);
       } catch (error) {
         setStatus(error.message, true);
@@ -1662,7 +1648,7 @@
       state.edgeDraft = { sourceId: null, targetId: null };
       document.querySelector("#newEdgeComment").value = "";
       document.querySelector("#newEdgeWeight").value = "1";
-      newEdgeType.value = "related_to";
+      newEdgeType.value = "used_in";
       renderEdgeDraft();
     }
 
