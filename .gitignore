@@ -15,3 +15,7 @@ data/
 # Local text materials for manual testing
 test_data/
 Test_materials/
+
+*.png
+Notes/
+extract_pdf_text.py
